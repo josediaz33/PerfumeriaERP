@@ -25,7 +25,7 @@ function findSupplyForSize(supplies: Supply[], sizeML: number): Supply | undefin
 }
 
 export function Decants() {
-  const allProducts = useLiveQuery(() => db.products.filter(p => p.type === 'decant_source').toArray()) ?? []
+  const allProducts = useLiveQuery(() => db.products.filter(p => p.stockOpenML > 0).toArray()) ?? []
   const supplies = useLiveQuery(() => db.supplies.toArray()) ?? []
   const batches = useLiveQuery(() => db.decantBatches.orderBy('date').reverse().toArray()) ?? []
 
@@ -56,7 +56,9 @@ export function Decants() {
   const [editNotes, setEditNotes] = useState('')
 
   const product = allProducts.find(p => p.id === selectedProduct)
-  const cpm = product ? product.costPYG : 0  // Gs/ml
+  const cpm = product
+    ? (product.type === 'decant_source' ? product.costPYG : product.costPYG / product.sizeML)
+    : 0
   const supplyForSize = findSupplyForSize(supplies, selectedSize)
   const supplyCost = supplyForSize?.costPYG ?? 0
   const decantCost = cpm * selectedSize + supplyCost
@@ -362,8 +364,17 @@ export function Decants() {
                 if (autoP) setSellingPrice(String(autoP))
               }
             }}
-            options={[{ value: '0', label: 'Seleccionar...' }, ...allProducts.map(p => ({ value: String(p.id), label: `${p.brand} — ${p.name} (${p.stockOpenML}ml disponibles)` }))]}
+            options={[{ value: '0', label: 'Seleccionar...' }, ...allProducts.map(p => ({
+              value: String(p.id),
+              label: `${p.brand} — ${p.name} (${p.stockOpenML}ml disponibles)${p.type === 'tester' ? ' · TESTER' : p.type === 'sealed' ? ' · SELLADO ABIERTO' : ''}`,
+            }))]}
           />
+          {product && product.type !== 'decant_source' && (
+            <div className="flex items-center gap-2 text-xs bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 text-orange-700">
+              <AlertTriangle size={13} className="shrink-0" />
+              Este producto es un <strong>{product.type === 'tester' ? 'tester' : 'sellado'}</strong> abierto para decants. CPM calculado: {fmtPYG(Math.round(product.costPYG / product.sizeML))}/ml
+            </div>
+          )}
           <div>
             <label className="text-sm font-medium text-gray-700 block mb-1">Tamaño del decant</label>
             <div className="grid grid-cols-4 gap-2">

@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { Plus, Wallet, Building2, Smartphone, CreditCard, ArrowLeftRight, Trash2, Edit2 } from 'lucide-react'
+import { Plus, Wallet, Building2, Smartphone, CreditCard, ArrowLeftRight, Trash2, Edit2, History } from 'lucide-react'
 import { db } from '../db/db'
 import type { AccountType, Account } from '../db/types'
-import { fmtPYG, nowISO } from '../lib/format'
+import { fmtPYG, fmtDate, today, nowISO } from '../lib/format'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
 import { Card, CardBody } from '../components/ui/Card'
@@ -41,6 +41,11 @@ const typeOptions = [
 
 export function Cuentas() {
   const accounts = useLiveQuery(() => db.accounts.filter(a => a.isActive !== false).toArray()) ?? []
+  const allMovements = useLiveQuery(() => db.movements.orderBy('date').reverse().toArray()) ?? []
+
+  // ── Historial por cuenta ──
+  const [historyAccount, setHistoryAccount] = useState<Account | null>(null)
+  const [historyMonth, setHistoryMonth] = useState(() => today().slice(0, 7))
 
   // ── Nueva cuenta ──
   const [showNew, setShowNew] = useState(false)
@@ -168,6 +173,24 @@ export function Cuentas() {
     await db.accounts.update(id, { isActive: false })
   }
 
+  // ── Recalcular saldo desde movimientos ──
+  async function recalculateBalance(accountId: number) {
+    const movements = await db.movements.toArray()
+    let balance = 0
+    for (const m of movements) {
+      if (m.type === 'income' && m.accountId === accountId) balance += m.amount
+      else if (m.type === 'expense' && m.accountId === accountId) balance -= m.amount
+      else if (m.type === 'transfer') {
+        if (m.accountId === accountId) balance -= m.amount
+        if (m.toAccountId === accountId) balance += m.amount
+      }
+    }
+    await db.accounts.update(accountId, { balance: Math.round(balance) })
+    if (editAccount?.id === accountId) {
+      setEditForm(f => ({ ...f, newBalance: String(Math.round(balance)) }))
+    }
+  }
+
   // Balance diff display (for edit modal)
   const editNewBalance = parseFloat(editForm.newBalance) || 0
   const editDiff = editAccount ? editNewBalance - editAccount.balance : 0
@@ -214,6 +237,13 @@ export function Cuentas() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => { setHistoryAccount(account); setHistoryMonth(today().slice(0, 7)) }}
+                      className="p-1.5 rounded-lg text-gray-300 hover:bg-violet-50 hover:text-violet-600 transition-all cursor-pointer"
+                      title="Ver historial"
+                    >
+                      <History size={14} />
+                    </button>
                     <button
                       onClick={() => openEdit(account)}
                       className="p-1.5 rounded-lg text-gray-300 hover:bg-gray-100 hover:text-gray-600 transition-all cursor-pointer"
@@ -296,7 +326,16 @@ export function Cuentas() {
 
             {/* Balance correction */}
             <div className="border-t border-gray-100 pt-4">
-              <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Corrección de saldo</p>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-medium text-gray-400 uppercase tracking-wide">Corrección de saldo</p>
+                <button
+                  onClick={() => recalculateBalance(editAccount.id!)}
+                  className="text-xs text-violet-600 hover:text-violet-800 underline cursor-pointer"
+                  title="Recalcula el saldo sumando todos los movimientos registrados para esta cuenta"
+                >
+                  Recalcular desde movimientos
+                </button>
+              </div>
               <div className="flex items-center justify-between text-sm mb-3 bg-gray-50 rounded-lg px-3 py-2">
                 <span className="text-gray-500">Saldo actual</span>
                 <span className="font-bold text-gray-900">{fmtPYG(editAccount.balance)}</span>
@@ -332,6 +371,75 @@ export function Cuentas() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Modal historial de cuenta */}
+      <Modal isOpen={!!historyAccount} onClose={() => setHistoryAccount(null)} title={`Historial — ${historyAccount?.name ?? ''}`} size="lg">
+        {historyAccount && (() => {
+          const accountMovements = allMovements.filter(m =>
+            (m.accountId === historyAccount.id || m.toAccountId === historyAccount.id) &&
+            m.date.startsWith(historyMonth)
+          )
+          const income = accountMovements.filter(m => m.type === 'income' || m.toAccountId === historyAccount.id && m.type === 'transfer').reduce((s, m) => s + m.amount, 0)
+          const expense = accountMovements.filter(m => m.type === 'expense' || m.accountId === historyAccount.id && m.type === 'transfer').reduce((s, m) => s + m.amount, 0)
+          return (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <input
+                  type="month"
+                  className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                  value={historyMonth}
+                  onChange={e => setHistoryMonth(e.target.value)}
+                />
+                <span className="text-sm text-gray-400 ml-auto">{accountMovements.length} movimientos</span>
+              </div>
+              <div className="grid grid-cols-3 gap-3 text-sm">
+                <div className="bg-green-50 rounded-lg px-3 py-2">
+                  <p className="text-green-600 font-medium">Ingresos</p>
+                  <p className="font-bold text-green-700">{fmtPYG(income)}</p>
+                </div>
+                <div className="bg-red-50 rounded-lg px-3 py-2">
+                  <p className="text-red-600 font-medium">Egresos</p>
+                  <p className="font-bold text-red-700">{fmtPYG(expense)}</p>
+                </div>
+                <div className="bg-violet-50 rounded-lg px-3 py-2">
+                  <p className="text-violet-600 font-medium">Saldo actual</p>
+                  <p className="font-bold text-violet-700">{fmtPYG(historyAccount.balance)}</p>
+                </div>
+              </div>
+              {accountMovements.length === 0 ? (
+                <p className="text-center text-gray-400 py-8 text-sm">Sin movimientos en este período</p>
+              ) : (
+                <div className="border border-gray-100 rounded-xl overflow-hidden max-h-96 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-gray-50">
+                      <tr className="border-b border-gray-100">
+                        <th className="text-left px-4 py-2.5 text-gray-500 font-medium">Fecha</th>
+                        <th className="text-left px-4 py-2.5 text-gray-500 font-medium">Descripción</th>
+                        <th className="text-right px-4 py-2.5 text-gray-500 font-medium">Monto</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {accountMovements.map(m => {
+                        const isIncoming = m.type === 'income' || (m.type === 'transfer' && m.toAccountId === historyAccount.id)
+                        const isOutgoing = m.type === 'expense' || (m.type === 'transfer' && m.accountId === historyAccount.id)
+                        return (
+                          <tr key={m.id} className="border-b border-gray-50 hover:bg-gray-50">
+                            <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{fmtDate(m.date)}</td>
+                            <td className="px-4 py-2.5 text-gray-700">{m.description}</td>
+                            <td className={`px-4 py-2.5 text-right font-semibold whitespace-nowrap ${isIncoming ? 'text-green-600' : isOutgoing ? 'text-red-600' : 'text-violet-600'}`}>
+                              {isIncoming ? '+' : isOutgoing ? '−' : '↔'} {fmtPYG(m.amount)}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )
+        })()}
       </Modal>
 
       {/* Modal transferencia */}

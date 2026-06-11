@@ -1,8 +1,8 @@
 import { useState, Fragment } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { Plus, Truck, Globe, DollarSign, Package, ChevronDown, ChevronUp, Trash2, X as XIcon } from 'lucide-react'
+import { Plus, Truck, Globe, DollarSign, Package, ChevronDown, ChevronUp, Trash2, X as XIcon, Edit2 } from 'lucide-react'
 import { db } from '../db/db'
-import type { OrderStatus } from '../db/types'
+import type { Order, OrderStatus } from '../db/types'
 import { fmtPYG, fmtUSD, fmtDate, today, nowISO } from '../lib/format'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
@@ -37,6 +37,14 @@ export function Proveedores() {
   const [receiveDate, setReceiveDate] = useState(today())
   const [receiveRegisterPayment, setReceiveRegisterPayment] = useState(false)
   const [receiveAccountId, setReceiveAccountId] = useState('')
+
+  // Edit received order modal
+  const [editOrder, setEditOrder] = useState<Order | null>(null)
+  const [editOrderForm, setEditOrderForm] = useState({
+    exchangeRate: '7500',
+    shippingTotal: '0',
+    items: [] as { productName: string; brand: string; sizeML: number; quantity: number; unitPriceUSD: string }[],
+  })
 
   const [sForm, setSForm] = useState({
     name: '', country: 'Paraguay', website: '', paymentTerms: '', estimatedDeliveryDays: '7', notes: '',
@@ -199,6 +207,109 @@ export function Proveedores() {
 
     setShowReceive(false)
     setReceivingOrderId(null)
+  }
+
+  function openEditReceivedOrder(order: Order) {
+    setEditOrder(order)
+    setEditOrderForm({
+      exchangeRate: String(order.exchangeRate),
+      shippingTotal: String(order.shippingTotalPYG ?? 0),
+      items: order.items.map(i => ({
+        productName: i.productName,
+        brand: i.brand,
+        sizeML: i.sizeML,
+        quantity: i.quantity,
+        unitPriceUSD: String(i.unitPriceUSD),
+      })),
+    })
+  }
+
+  async function handleEditReceivedOrder() {
+    if (!editOrder) return
+    const isLocal = editOrder.localCurrency ?? false
+    const newRate = isLocal ? 1 : (parseFloat(editOrderForm.exchangeRate) || 7500)
+    const newShipping = parseFloat(editOrderForm.shippingTotal) || 0
+    const newItems = editOrderForm.items.map((fi, idx) => ({
+      ...editOrder.items[idx],
+      unitPriceUSD: parseFloat(fi.unitPriceUSD) || 0,
+    }))
+    const newTotalUSD = newItems.reduce((s, i) => s + i.unitPriceUSD * i.quantity, 0)
+    const newTotalPYG = Math.round(newTotalUSD * newRate + newShipping)
+
+    // Compute old total to derive account delta
+    const oldTotalPYG = editOrder.totalPYG + (editOrder.shippingTotalPYG ?? 0)
+    const costDelta = newTotalPYG - oldTotalPYG
+
+    const now = nowISO()
+    const entries = await db.stockEntries.where('orderId').equals(editOrder.id!).toArray()
+
+    await db.transaction('rw', [db.orders, db.stockEntries, db.products, db.movements, db.accounts], async () => {
+      // Update the order record
+      await db.orders.update(editOrder.id!, {
+        items: newItems,
+        totalUSD: newTotalUSD,
+        exchangeRate: newRate,
+        totalPYG: Math.round(newTotalUSD * newRate),
+        shippingTotalPYG: newShipping,
+      })
+
+      // Update each stock entry cost and recalculate product CPP
+      const affectedProductIds = new Set<number>()
+      for (const entry of entries) {
+        const product = products.find(p => p.id === entry.productId)
+        if (!product) continue
+        // Find matching order item by product name/brand
+        const matchedItem = newItems.find(
+          i => i.productName.toLowerCase() === product.name.toLowerCase() &&
+               i.brand.toLowerCase() === product.brand.toLowerCase()
+        )
+        if (!matchedItem) continue
+
+        const isDecant = product.type === 'decant_source'
+        const sizeML = product.sizeML || matchedItem.sizeML
+        const itemQty = matchedItem.quantity
+        const myUSD = matchedItem.unitPriceUSD * itemQty
+        const myShippingPYG = newTotalUSD > 0 ? newShipping * (myUSD / (newTotalUSD)) : 0
+        const shippingPerUnit = (isDecant ? itemQty * sizeML : itemQty) > 0
+          ? myShippingPYG / (isDecant ? itemQty * sizeML : itemQty)
+          : 0
+        const costUSD = isDecant ? matchedItem.unitPriceUSD / sizeML : matchedItem.unitPriceUSD
+        const newCostPYG = costUSD * newRate + shippingPerUnit
+
+        await db.stockEntries.update(entry.id!, { costUSD, exchangeRate: newRate, costPYG: newCostPYG })
+        affectedProductIds.add(product.id!)
+      }
+
+      // Recalculate CPP for each affected product
+      for (const pid of affectedProductIds) {
+        const allLots = await db.stockEntries.where('productId').equals(pid).toArray()
+        const totalQty = allLots.reduce((s, l) => s + l.quantity, 0)
+        if (totalQty > 0) {
+          const newCPP = allLots.reduce((s, l) => s + l.costPYG * l.quantity, 0) / totalQty
+          const newCostUSD = allLots.reduce((s, l) => s + l.costUSD * l.quantity, 0) / totalQty
+          await db.products.where('id').equals(pid).modify(p => {
+            p.costPYG = newCPP
+            p.costUSD = newCostUSD
+            p.exchangeRateUsed = newRate
+            p.updatedAt = now
+          })
+        }
+      }
+
+      // Cascade to accounting movement + account balance
+      if (Math.abs(costDelta) > 0) {
+        const movement = await db.movements.filter(
+          m => m.referenceType === 'order' && m.referenceId === editOrder.id
+        ).first()
+        if (movement) {
+          const newAmount = Math.max(0, movement.amount + costDelta)
+          await db.movements.update(movement.id!, { amount: newAmount })
+          await db.accounts.where('id').equals(movement.accountId).modify(a => { a.balance -= costDelta })
+        }
+      }
+    })
+
+    setEditOrder(null)
   }
 
   async function handleDeleteOrder(order: (typeof orders)[0]) {
@@ -391,6 +502,15 @@ export function Proveedores() {
                               <Button size="sm" onClick={() => openReceive(o.id!)}>
                                 Recibir
                               </Button>
+                            )}
+                            {o.status === 'received' && (
+                              <button
+                                onClick={() => openEditReceivedOrder(o)}
+                                className="p-1.5 rounded text-gray-400 hover:text-violet-600 hover:bg-violet-50 transition-colors"
+                                title="Editar precios del pedido recibido"
+                              >
+                                <Edit2 size={14} />
+                              </button>
                             )}
                             <button
                               onClick={() => handleDeleteOrder(o)}
@@ -723,6 +843,89 @@ export function Proveedores() {
           </div>
         </Modal>
       )}
+
+      {/* Modal editar pedido recibido */}
+      <Modal isOpen={!!editOrder} onClose={() => setEditOrder(null)} title="Editar pedido recibido" size="lg">
+        {editOrder && (
+          <div className="space-y-4">
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
+              Los cambios actualizarán los costos de stock, el CPP de cada producto y el movimiento en Contabilidad.
+            </div>
+
+            {!editOrder.localCurrency && (
+              <Input
+                label="Cotización USD/PYG"
+                type="number"
+                value={editOrderForm.exchangeRate}
+                onChange={e => setEditOrderForm(f => ({ ...f, exchangeRate: e.target.value }))}
+              />
+            )}
+            <Input
+              label="Costo de envío (Gs.)"
+              type="number"
+              value={editOrderForm.shippingTotal}
+              onChange={e => setEditOrderForm(f => ({ ...f, shippingTotal: e.target.value }))}
+            />
+
+            <div>
+              <p className="text-sm font-medium text-gray-700 mb-2">Precios por producto</p>
+              <div className="space-y-2">
+                {editOrderForm.items.map((item, i) => (
+                  <div key={i} className="flex items-center gap-3 bg-gray-50 rounded-lg px-3 py-2.5">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{item.brand} — {item.productName}</p>
+                      <p className="text-xs text-gray-400">{item.sizeML}ml · ×{item.quantity}</p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <input
+                        type="number"
+                        className="w-24 text-right text-sm border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        value={item.unitPriceUSD}
+                        onChange={e => setEditOrderForm(f => ({
+                          ...f,
+                          items: f.items.map((x, j) => j === i ? { ...x, unitPriceUSD: e.target.value } : x),
+                        }))}
+                      />
+                      <span className="text-xs text-gray-400">{editOrder.localCurrency ? 'Gs.' : 'USD'} /u.</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Preview del nuevo total */}
+            {(() => {
+              const rate = editOrder.localCurrency ? 1 : (parseFloat(editOrderForm.exchangeRate) || 7500)
+              const shipping = parseFloat(editOrderForm.shippingTotal) || 0
+              const newTotalUSD = editOrderForm.items.reduce((s, i) => s + (parseFloat(i.unitPriceUSD) || 0) * i.quantity, 0)
+              const newTotalPYG = Math.round(newTotalUSD * rate + shipping)
+              const oldTotalPYG = editOrder.totalPYG + (editOrder.shippingTotalPYG ?? 0)
+              const delta = newTotalPYG - oldTotalPYG
+              return (
+                <div className="bg-gray-50 rounded-lg px-4 py-3 space-y-1 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Nuevo total</span>
+                    <span className="font-bold text-gray-900">{fmtPYG(newTotalPYG)}</span>
+                  </div>
+                  {Math.abs(delta) > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Diferencia vs. registrado</span>
+                      <span className={`font-semibold ${delta > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                        {delta > 0 ? '+' : ''}{fmtPYG(delta)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+
+            <div className="flex gap-2 pt-2">
+              <Button variant="secondary" className="flex-1" onClick={() => setEditOrder(null)}>Cancelar</Button>
+              <Button className="flex-1" onClick={handleEditReceivedOrder}>Guardar cambios</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }

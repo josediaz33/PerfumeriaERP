@@ -236,13 +236,16 @@ export function Logistica() {
         ? `Este pedido tiene señas registradas (${fmtPYG(order.advancePayments!.reduce((s, p) => s + p.amount, 0))}). ¿Eliminar y revertir los cobros?`
         : `¿Eliminar el pedido de ${order.customerName}?`
       if (!confirm(msg)) return
-      await db.transaction('rw', [db.localOrders, db.accounts, db.movements], async () => {
+      await db.transaction('rw', [db.localOrders, db.accounts, db.movements, db.budgets], async () => {
         for (const seña of order.advancePayments ?? []) {
           await db.accounts.where('id').equals(seña.accountId).modify(a => { a.balance -= seña.amount })
         }
         const movs = await db.movements.where('referenceId').equals(order.id!).filter(m => m.referenceType === 'local_order').toArray()
         for (const m of movs) if (m.id) await db.movements.delete(m.id)
         await db.localOrders.delete(order.id!)
+        if (order.budgetId) {
+          await db.budgets.update(order.budgetId, { localOrderId: undefined, updatedAt: nowISO() })
+        }
       })
       setShowDetail(null)
       return
@@ -365,7 +368,7 @@ export function Logistica() {
             let supply = await db.supplies.where('sizeML').equals(sizeML).first()
             if (!supply) supply = await db.supplies.filter(s => (s.type as string) === `${sizeML}ml`).first()
             if (supply?.id) await db.supplies.update(supply.id, { stock: Math.max(0, supply.stock - item.quantity), updatedAt: now })
-            const cpm = product.costPYG  // Gs/ml (stored per ML for decant_source)
+            const cpm = product.type === 'decant_source' ? product.costPYG : product.costPYG / product.sizeML
             await db.decantBatches.add({
               productId: item.productId, sizeML, quantity: item.quantity,
               supplyId: supply?.id ?? 0,
@@ -392,7 +395,7 @@ export function Logistica() {
               await db.stockEntries.update(lot.id!, { quantityRemaining: avail - deduct })
               mlLeft -= deduct
             }
-            const cpm = product.costPYG  // Gs/ml (stored per ML for decant_source)
+            const cpm = product.type === 'decant_source' ? product.costPYG : product.costPYG / product.sizeML
             await db.decantBatches.add({
               productId: item.productId, sizeML, quantity: item.quantity,
               supplyId: 0,
@@ -436,9 +439,12 @@ export function Logistica() {
   }
 
   async function handleDeliveryPayment() {
-    if (!pendingDeliveryId || !payAccountId) return
+    if (!pendingDeliveryId) return
     const order = orders.find(o => o.id === pendingDeliveryId)
     if (!order) return
+    const señaTotalCheck = (order.advancePayments ?? []).reduce((s, p) => s + p.amount, 0)
+    const saldoCheck = Math.max(0, order.totalAmount - señaTotalCheck)
+    if (saldoCheck > 0 && !payAccountId) return
     const now = nowISO()
 
     // Pre-calcular costos antes de la transacción
@@ -569,9 +575,10 @@ export function Logistica() {
                         <StatusIcon size={18} className={o.status === 'pending' ? 'text-yellow-600' : o.status === 'preparing' ? 'text-blue-600' : o.status === 'ready' ? 'text-violet-600' : o.status === 'delivered' ? 'text-green-600' : 'text-gray-400'} />
                       </div>
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <p className="font-semibold text-gray-900">{o.customerName}</p>
                           {o.isPreOrder && <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-medium">Pre-pedido</span>}
+                          {o.budgetId && <span className="text-xs bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-medium">Pres. #{String(o.budgetId).padStart(4, '0')}</span>}
                           {(o.advancePayments?.length ?? 0) > 0 && (
                             <span className="text-xs bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded font-medium">
                               Seña {fmtPYG(o.advancePayments!.reduce((s, p) => s + p.amount, 0))}
@@ -639,7 +646,13 @@ export function Logistica() {
               <div key={i} className="flex items-center gap-2 mb-2">
                 <div className="grid grid-cols-5 gap-2 flex-1">
                   <Select value={item.productId} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, productId: e.target.value } : x) }))}
-                    options={[{ value: '0', label: 'Producto...' }, ...(item.type === 'partial' ? products.filter(p => p.type === 'decant_source') : products).map(p => ({ value: String(p.id), label: item.type === 'partial' ? `${p.brand} — ${p.name} (${p.stockOpenML}ml)` : `${p.brand} — ${p.name}` }))]} />
+                    options={[{ value: '0', label: 'Producto...' }, ...(
+                      item.type === 'sealed'
+                        ? products.filter(p => p.type === 'sealed' || p.type === 'tester')
+                        : item.type === 'decant' || item.type === 'partial'
+                          ? products.filter(p => p.stockOpenML > 0)
+                          : products
+                    ).map(p => ({ value: String(p.id), label: (item.type === 'decant' || item.type === 'partial') ? `${p.brand} — ${p.name} (${p.stockOpenML}ml)` : `${p.brand} — ${p.name}` }))]} />
                   <Select value={item.type} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, type: e.target.value as any, productId: '0' } : x) }))}
                     options={[{ value: 'sealed', label: 'Sellado' }, { value: 'decant', label: 'Decant' }, { value: 'partial', label: 'Parcial' }]} />
                   {item.type === 'decant' && (
@@ -808,6 +821,12 @@ export function Logistica() {
       {selectedOrder && (
         <Modal isOpen={!!showDetail} onClose={() => setShowDetail(null)} title={`Pedido — ${selectedOrder.customerName}`} size="lg">
           <div className="space-y-4 text-sm">
+            {selectedOrder.budgetId && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 flex items-center gap-2 text-xs text-emerald-700">
+                <span className="font-medium">Origen:</span>
+                <span>Presupuesto #{String(selectedOrder.budgetId).padStart(4, '0')}</span>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <div><p className="text-gray-500">Teléfono</p><p className="font-medium">{selectedOrder.customerPhone || '—'}</p></div>
               <div><p className="text-gray-500">Dirección</p><p className="font-medium">{selectedOrder.customerAddress || '—'}</p></div>

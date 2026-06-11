@@ -1,8 +1,8 @@
 import { useState, Fragment } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { Plus, Package, Search, AlertTriangle, Edit2, Trash2, Info, ChevronDown, ChevronRight, Truck, X } from 'lucide-react'
+import { Plus, Package, Search, AlertTriangle, Edit2, Trash2, Info, ChevronDown, ChevronRight, Truck, X, Droplets } from 'lucide-react'
 import { db } from '../db/db'
-import type { Concentration, OlfactiveFamily, ProductType, StockEntry } from '../db/types'
+import type { Concentration, OlfactiveFamily, Product, ProductType, StockEntry } from '../db/types'
 import { fmtPYG, fmtUSD, fmtDate, today, nowISO } from '../lib/format'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
@@ -70,6 +70,9 @@ export function Inventario() {
   const [batchNotes, setBatchNotes] = useState('')
   const [batchItems, setBatchItems] = useState<BatchFormItem[]>([emptyBatchItem()])
   const [batchLocalCurrency, setBatchLocalCurrency] = useState(false)
+
+  // Modal "Abrir para decants"
+  const [openDecantProduct, setOpenDecantProduct] = useState<Product | null>(null)
 
   // Modal editar lote
   const [editLote, setEditLote] = useState<StockEntry | null>(null)
@@ -185,6 +188,32 @@ export function Inventario() {
     setShowForm(false)
   }
 
+  async function handleOpenForDecants(p: Product) {
+    if (p.stockSealed < 1) return
+    const now = nowISO()
+    await db.transaction('rw', db.products, db.stockEntries, async () => {
+      await db.products.update(p.id!, {
+        stockSealed: p.stockSealed - 1,
+        stockOpenML: p.stockOpenML + p.sizeML,
+        updatedAt: now,
+      })
+      // FIFO: consume from oldest sealed lot
+      const lots = (await db.stockEntries.where('productId').equals(p.id!).toArray())
+        .filter(l => l.type === 'sealed' || l.type === 'tester')
+        .sort((a, b) => a.date.localeCompare(b.date))
+      let toDeduct = 1
+      for (const lot of lots) {
+        if (toDeduct <= 0) break
+        const avail = lot.quantityRemaining !== undefined ? lot.quantityRemaining : lot.quantity
+        if (avail <= 0) continue
+        const deduct = Math.min(avail, toDeduct)
+        await db.stockEntries.update(lot.id!, { quantityRemaining: avail - deduct })
+        toDeduct -= deduct
+      }
+    })
+    setOpenDecantProduct(null)
+  }
+
   async function handleDelete(id: number) {
     if (!confirm('¿Eliminar este producto? También se eliminarán todos sus lotes de stock.')) return
     await db.transaction('rw', db.products, db.stockEntries, async () => {
@@ -248,8 +277,12 @@ export function Inventario() {
     const newCPP = totalQty > 0 ? updatedLots.reduce((s, l) => s + l.costPYG * l.quantity, 0) / totalQty : 0
     const newCostUSDAvg = totalQty > 0 ? updatedLots.reduce((s, l) => s + l.costUSD * l.quantity, 0) / totalQty : 0
 
+    const oldCostTotal = Math.round(editLote.quantity * editLote.costPYG)
+    const newCostTotal = Math.round(newStoredQty * newBatchCostPYG)
+    const costDelta = newCostTotal - oldCostTotal
+
     const now = nowISO()
-    await db.transaction('rw', db.products, db.stockEntries, async () => {
+    await db.transaction('rw', db.products, db.stockEntries, db.movements, db.accounts, async () => {
       await db.stockEntries.update(editLote.id!, {
         quantity: newStoredQty,
         quantityRemaining: newRemaining,
@@ -259,13 +292,34 @@ export function Inventario() {
         date: editLoteForm.date,
       })
       await db.products.where('id').equals(editLote.productId).modify(p => {
-        if (editLote.type === 'sealed') p.stockSealed = Math.max(0, p.stockSealed + qtyDelta)
+        if (editLote.type === 'sealed' || editLote.type === 'tester') p.stockSealed = Math.max(0, p.stockSealed + qtyDelta)
         else p.stockOpenML = Math.max(0, p.stockOpenML + qtyDelta)
         p.costPYG = newCPP
         p.costUSD = newCostUSDAvg
         p.exchangeRateUsed = newExchangeRate
         p.updatedAt = now
       })
+
+      // Cascade cost change to the linked accounting movement + account balance
+      if (Math.abs(costDelta) > 0) {
+        const directMovement = await db.movements.filter(
+          m => m.referenceType === 'stock_entry' && m.referenceId === editLote.id
+        ).first()
+        if (directMovement) {
+          const newAmount = Math.max(0, directMovement.amount + costDelta)
+          await db.movements.update(directMovement.id!, { amount: newAmount })
+          await db.accounts.where('id').equals(directMovement.accountId).modify(a => { a.balance -= costDelta })
+        } else if (editLote.orderId) {
+          const orderMovement = await db.movements.filter(
+            m => m.referenceType === 'order' && m.referenceId === editLote.orderId
+          ).first()
+          if (orderMovement) {
+            const newAmount = Math.max(0, orderMovement.amount + costDelta)
+            await db.movements.update(orderMovement.id!, { amount: newAmount })
+            await db.accounts.where('id').equals(orderMovement.accountId).modify(a => { a.balance -= costDelta })
+          }
+        }
+      }
     })
     setEditLote(null)
   }
@@ -530,6 +584,7 @@ export function Inventario() {
         <select className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500" value={filterType} onChange={e => setFilterType(e.target.value as typeof filterType)}>
           <option value="all">Todos los tipos</option>
           <option value="sealed">Sellados</option>
+          <option value="tester">Testers</option>
           <option value="decant_source">Para decants</option>
         </select>
         <select className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500" value={filterFamily} onChange={e => setFilterFamily(e.target.value)}>
@@ -561,7 +616,7 @@ export function Inventario() {
               <tbody>
                 {filtered.map(p => {
                   const lowStock = p.stockSealed > 0 && p.stockSealed <= p.minStock
-                  const noStock = p.type === 'sealed' ? p.stockSealed === 0 : p.stockOpenML === 0
+                  const noStock = p.type === 'decant_source' ? p.stockOpenML === 0 : p.stockSealed === 0
                   const isExpanded = expandedProductId === p.id
                   const productEntries = allEntries.filter(e => e.productId === p.id)
                   const totalEntriesQty = productEntries.reduce((s, e) => s + e.quantity, 0)
@@ -604,8 +659,8 @@ export function Inventario() {
                           </div>
                         </td>
                         <td className="px-5 py-3">
-                          <Badge color={p.type === 'sealed' ? 'blue' : 'violet'}>
-                            {p.type === 'sealed' ? 'Sellado' : 'Para decants'}
+                          <Badge color={p.type === 'sealed' ? 'blue' : p.type === 'tester' ? 'orange' : 'violet'}>
+                            {p.type === 'sealed' ? 'Sellado' : p.type === 'tester' ? 'Tester' : 'Para decants'}
                           </Badge>
                         </td>
                         <td className="px-5 py-3 text-right">
@@ -637,12 +692,20 @@ export function Inventario() {
                           <div className="flex items-center justify-end gap-1.5">
                             {lowStock && <AlertTriangle size={14} className="text-orange-500" />}
                             <span className={`${lowStock ? 'text-orange-600 font-semibold' : noStock ? 'text-gray-400' : 'text-gray-900'}`}>
-                              {p.type === 'sealed' ? `${p.stockSealed} u.` : `${p.stockOpenML} ml`}
+                              {p.type === 'decant_source' ? `${p.stockOpenML} ml` : `${p.stockSealed} u.`}
                             </span>
+                            {(p.type === 'sealed' || p.type === 'tester') && p.stockOpenML > 0 && (
+                              <span className="text-xs text-violet-500 ml-1">+{p.stockOpenML}ml</span>
+                            )}
                           </div>
                         </td>
                         <td className="px-5 py-3 text-right">
                           <div className="flex items-center justify-end gap-1">
+                            {(p.type === 'sealed' || p.type === 'tester') && p.stockSealed > 0 && (
+                              <button onClick={() => setOpenDecantProduct(p)} className="p-1.5 rounded-lg hover:bg-violet-50 text-gray-300 hover:text-violet-600 cursor-pointer" title="Abrir para decants">
+                                <Droplets size={14} />
+                              </button>
+                            )}
                             <button onClick={() => openIngresar(p.id)} className="p-1.5 rounded-lg hover:bg-violet-50 text-gray-300 hover:text-violet-600 cursor-pointer" title="Ingresar lote">
                               <Plus size={14} />
                             </button>
@@ -810,7 +873,7 @@ export function Inventario() {
           <Select label="Concentración" value={form.concentration} onChange={e => setForm(f => ({ ...f, concentration: e.target.value as Concentration }))} options={concentrations.map(c => ({ value: c, label: c }))} />
           <Select label="Familia olfativa" value={form.olfactiveFamily} onChange={e => setForm(f => ({ ...f, olfactiveFamily: e.target.value as OlfactiveFamily }))} options={families.map(f => ({ value: f.value, label: f.label }))} />
           <Input label="Tamaño (ml)" type="number" value={form.sizeML} onChange={e => setForm(f => ({ ...f, sizeML: e.target.value }))} />
-          <Select label="Tipo" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value as ProductType }))} options={[{ value: 'sealed', label: 'Sellado para venta' }, { value: 'decant_source', label: 'Abierto para decants' }]} />
+          <Select label="Tipo" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value as ProductType }))} options={[{ value: 'sealed', label: 'Sellado para venta' }, { value: 'tester', label: 'Tester (para venta)' }, { value: 'decant_source', label: 'Abierto para decants' }]} />
           {form.type === 'decant_source' ? (
             <div className="col-span-2">
               <p className="text-sm font-medium text-gray-700 mb-2">Precios de venta por tamaño (Gs.)</p>
@@ -1246,6 +1309,31 @@ export function Inventario() {
             </Button>
           </div>
         </div>
+      </Modal>
+
+      {/* ── Modal Abrir para decants ── */}
+      <Modal isOpen={!!openDecantProduct} onClose={() => setOpenDecantProduct(null)} title="Abrir para decants">
+        {openDecantProduct && (
+          <div className="space-y-4">
+            <div className="bg-violet-50 rounded-xl p-4 space-y-2 text-sm">
+              <p className="font-semibold text-gray-900">{openDecantProduct.brand} — {openDecantProduct.name}</p>
+              <p className="text-gray-600">Se va a consumir <strong>1 unidad sellada</strong> ({openDecantProduct.sizeML}ml) y agregar <strong>{openDecantProduct.sizeML}ml</strong> al stock abierto para decants.</p>
+              <div className="grid grid-cols-2 gap-2 pt-1 text-xs text-gray-500">
+                <span>Stock sellado actual: <strong className="text-gray-800">{openDecantProduct.stockSealed} u.</strong></span>
+                <span>ML abiertos actuales: <strong className="text-gray-800">{openDecantProduct.stockOpenML} ml</strong></span>
+                <span>Quedará sellado: <strong className="text-orange-700">{openDecantProduct.stockSealed - 1} u.</strong></span>
+                <span>Quedará abierto: <strong className="text-violet-700">{openDecantProduct.stockOpenML + openDecantProduct.sizeML} ml</strong></span>
+              </div>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <Button variant="secondary" className="flex-1" onClick={() => setOpenDecantProduct(null)}>Cancelar</Button>
+              <Button className="flex-1" onClick={() => handleOpenForDecants(openDecantProduct)}>
+                <Droplets size={15} />
+                Confirmar apertura
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   )

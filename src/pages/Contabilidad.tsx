@@ -38,16 +38,17 @@ export function Contabilidad() {
   const accounts = useLiveQuery(() => db.accounts.filter(a => a.isActive !== false).toArray()) ?? []
   const [filterMonth, setFilterMonth] = useState(() => today().slice(0, 7))
   const [filterType, setFilterType] = useState<'all' | 'income' | 'expense'>('all')
+  const [filterAccount, setFilterAccount] = useState<string>('all')
 
   const movements = useLiveQuery(async () => {
-    let q = db.movements.orderBy('date').reverse()
-    const all = await q.toArray()
+    const all = await db.movements.orderBy('date').reverse().toArray()
     return all.filter(m => {
       if (filterMonth && !m.date.startsWith(filterMonth)) return false
       if (filterType !== 'all' && m.type !== filterType) return false
+      if (filterAccount !== 'all' && String(m.accountId) !== filterAccount && String(m.toAccountId) !== filterAccount) return false
       return true
     })
-  }, [filterMonth, filterType]) ?? []
+  }, [filterMonth, filterType, filterAccount]) ?? []
 
   const income = movements.filter(m => m.type === 'income').reduce((s, m) => s + m.amount, 0)
   const expense = movements.filter(m => m.type === 'expense').reduce((s, m) => s + m.amount, 0)
@@ -200,7 +201,7 @@ export function Contabilidad() {
 
       {/* Filtros */}
       <Card className="mb-4">
-        <CardBody className="flex gap-3 items-center">
+        <CardBody className="flex flex-wrap gap-3 items-center">
           <Filter size={15} className="text-gray-400 shrink-0" />
           <input
             type="month"
@@ -219,6 +220,14 @@ export function Contabilidad() {
               </button>
             ))}
           </div>
+          <select
+            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500"
+            value={filterAccount}
+            onChange={e => setFilterAccount(e.target.value)}
+          >
+            <option value="all">Todas las cuentas</option>
+            {accounts.map(a => <option key={a.id} value={String(a.id)}>{a.name}</option>)}
+          </select>
           <span className="text-sm text-gray-400 ml-auto">{movements.length} movimientos</span>
         </CardBody>
       </Card>

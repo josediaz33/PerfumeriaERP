@@ -12,7 +12,7 @@
 
 ## Descripción
 
-JODA Parfums ERP es una aplicación web progresiva diseñada específicamente para negocios de perfumería que manejan productos sellados y producción de decants (fraccionamiento). Cubre el ciclo completo de operaciones: desde la gestión de stock y producción hasta ventas, logística de entrega, contabilidad y reportes.
+JODA Parfums ERP es una aplicación web diseñada específicamente para negocios de perfumería que manejan productos sellados, testers y producción de decants (fraccionamiento). Cubre el ciclo completo: desde la gestión de stock y producción hasta presupuestos, logística de entrega, contabilidad y análisis de rentabilidad.
 
 Toda la información se almacena localmente en el navegador mediante **IndexedDB** (Dexie.js), lo que garantiza privacidad total, uso sin conexión y cero costos de infraestructura.
 
@@ -22,18 +22,19 @@ Toda la información se almacena localmente en el navegador mediante **IndexedDB
 
 | Módulo | Descripción |
 |--------|-------------|
-| **Dashboard** | Vista general con KPIs: ventas del mes, utilidad, stock crítico, pedidos pendientes |
-| **Inventario** | Gestión de productos sellados y fuentes de decant, compras con CPP ponderado (FIFO), alertas de stock mínimo |
-| **Decants** | Producción de decants, control de ML por frasco, historial trazable por origen (manual, venta, pedido) |
-| **Ventas** | Registro de pedidos con carrito de productos, generación de órdenes que fluyen a Logística |
-| **Logística** | Pipeline de pedidos locales: Pendiente → En preparación → Listo → Entregado, con validación de stock antes de preparar |
-| **Contabilidad** | Registro de ingresos y egresos, vinculación con ventas y reposiciones, reversión de lotes al eliminar un egreso |
-| **Cuentas** | Billeteras y cuentas bancarias, seguimiento de saldos en tiempo real |
-| **Proveedores** | Base de datos de proveedores, historial de precios, gestión de pedidos internacionales |
-| **Catálogo** | Catálogo visual de productos con información de concentración, familia olfativa y precios por tamaño |
-| **Presupuestos** | Generación y exportación de presupuestos en PDF para clientes |
-| **Utilidades** | Distribución porcentual de la utilidad neta: reinversión, reposición y retiro personal |
-| **Configuración** | Parámetros del negocio, tipo de cambio USD/PYG, datos de contacto |
+| **Dashboard** | KPIs del mes: ventas, utilidad, stock crítico, pedidos pendientes |
+| **Inventario** | Productos por tipo (sellado / tester / decant\_source), lotes con CPP ponderado (FIFO), alertas de stock mínimo, apertura de botella para decants |
+| **Decants** | Producción de frascos, control de ML, historial trazable por origen |
+| **Ventas** | Registro de ventas directas con desglose de ganancia por ítem |
+| **Logística** | Pipeline de pedidos locales con validación de stock, señas (pagos anticipados) y entrega con cobro de saldo |
+| **Contabilidad** | Movimientos contables con filtros por mes, tipo y cuenta |
+| **Cuentas** | Saldos en tiempo real, historial por cuenta y recálculo desde movimientos |
+| **Proveedores** | Órdenes de compra internacionales con recepción, distribución de flete y edición en cascada |
+| **Presupuestos** | Presupuestos PDF por cliente con análisis de rentabilidad interno y conversión a pedido de logística |
+| **Clientes** | Directorio de clientes con historial de compras |
+| **Utilidades** | Análisis de rentabilidad histórica y distribución de ganancias |
+| **Catálogo** | Vista de productos con precios por tamaño |
+| **Configuración** | Parámetros del negocio, tipo de cambio USD/PYG |
 
 ---
 
@@ -45,12 +46,10 @@ Toda la información se almacena localmente en el navegador mediante **IndexedDB
 | Build tool | [Vite 8](https://vite.dev/) |
 | Estilos | [Tailwind CSS v4](https://tailwindcss.com/) (plugin nativo de Vite) |
 | Base de datos | [Dexie.js v4](https://dexie.org/) sobre IndexedDB del navegador |
-| Estado reactivo | [Dexie React Hooks](https://dexie.org/docs/dexie-react-hooks/useLiveQuery()) — `useLiveQuery` |
+| Estado reactivo | `useLiveQuery` de dexie-react-hooks |
 | Routing | [React Router v7](https://reactrouter.com/) |
-| Gráficos | [Recharts](https://recharts.org/) |
-| Exportación PDF | [jsPDF](https://github.com/parallax/jsPDF) + [html2canvas](https://html2canvas.hertzen.com/) |
+| Exportación PDF | [jsPDF](https://github.com/parallax/jsPDF) |
 | Iconografía | [Lucide React](https://lucide.dev/) |
-| Estado global | [Zustand](https://zustand-demo.pmnd.rs/) |
 
 ---
 
@@ -59,48 +58,129 @@ Toda la información se almacena localmente en el navegador mediante **IndexedDB
 ```
 src/
 ├── db/
-│   ├── db.ts          # Instancia Dexie + versiones del schema + seed
+│   ├── db.ts          # Instancia Dexie + versiones del schema + seed inicial
 │   └── types.ts       # Interfaces TypeScript para todas las entidades
 ├── lib/
-│   └── format.ts      # Helpers: formateo de moneda PYG, fechas, etc.
+│   ├── format.ts      # Helpers: fmtPYG, fmtDate, today, nowISO
+│   └── customers.ts   # upsertCustomer
 ├── components/
 │   ├── layout/        # Sidebar, Layout principal
-│   └── ui/            # Componentes reutilizables: Button, Card, Modal, Input, Badge...
+│   └── ui/            # Button, Card, Modal, Input, Select, Badge, PageHeader...
 └── pages/             # Un archivo por módulo de negocio
 ```
-
-**Modelo de datos clave:**
-- `Product` — sellados y fuentes de decant (con CPP y stock en ML)
-- `StockEntry` — lotes de compra con FIFO para deducción y reversión
-- `DecantBatch` — producción de decants trazable (`sourceType`: manual / sale / local_order)
-- `LocalOrder` — pedidos locales con estado pipeline
-- `Sale` + `SaleItem` — ventas completadas con desglose por producto
-- `Movement` — movimientos contables vinculados a ventas, reposiciones y pedidos
 
 ---
 
 ## Flujo principal de venta
 
 ```
-Ventas (crear pedido)
-        ↓
-Logística — Pendiente
+[Opción A] Ventas directas
+   ↓
+   Sale + SaleItem + movimiento contable
+
+[Opción B] Presupuesto → Pedido
+   Presupuesto (borrador → enviado → aceptado)
+        ↓  [botón "Crear pedido"]
+   Logística — Pendiente
         ↓  [valida stock + insumos]
-Logística — En preparación  ← descuenta ML/stock, crea DecantBatch
+   Logística — En preparación  ← descuenta ML/stock, crea DecantBatch, descuenta frascos
         ↓
-Logística — Listo
-        ↓  [registra cobro]
-Logística — Entregado       ← crea Sale + SaleItem + movimiento contable
+   Logística — Listo
+        ↓  [registra cobro / confirma si todo fue señado]
+   Logística — Entregado       ← crea Sale + SaleItem + movimiento contable
         ↓
-Aparece en historial de Ventas y Contabilidad
+   Aparece en Ventas, Contabilidad y Utilidades
 ```
+
+---
+
+## Tipos de producto
+
+| Tipo | Descripción | Stock | CPM |
+|------|-------------|-------|-----|
+| `sealed` | Botella sellada para venta | `stockSealed` (unidades) | — |
+| `tester` | Tester para venta (precio diferente) | `stockSealed` (unidades) | — |
+| `decant_source` | Botella abierta, fuente de decants | `stockOpenML` (ml) | `costPYG` |
+| cualquier otro abierto | Sellado/tester abierto para decants | `stockOpenML` (ml) | `costPYG / sizeML` |
+
+---
+
+## Reglas de negocio clave
+
+### CPM (costo por mililitro)
+```
+product.type === 'decant_source'  →  costPYG
+cualquier otro abierto            →  costPYG / sizeML
+```
+
+### Costo de un decant
+```
+costoDecant = CPM × sizeML + supply.costPYG (frasco)
+```
+
+### FIFO en lotes
+Al preparar un pedido o vender, `quantityRemaining` de cada `StockEntry` se decrementa desde el lote más antiguo hasta cubrir la cantidad requerida.
+
+### Cascade de costos al editar lotes
+Editar el costo de un lote calcula `costDelta = nuevoTotal - anteriorTotal` y lo propaga al `Movement` contable vinculado y al saldo de la `Account` correspondiente.
+
+### Señas (pagos anticipados en pedidos)
+Cada seña genera un `Movement` de ingreso inmediato. Al entregar, se cobra solo `max(0, totalAmount - señaTotal)`. Si el saldo es 0, la entrega se confirma sin requerir cuenta de cobro.
+
+### Insumos en pedidos con decants
+Al pasar un pedido a "Preparar", `advanceStatus` descuenta automáticamente el frasco correspondiente por cada ítem de tipo `decant` (búsqueda por `sizeML`). Por eso el array `supplies[]` del `LocalOrder` es para insumos adicionales (etiquetas, packaging, etc.) y **no** debe incluir los frascos de decant para evitar doble descuento.
+
+### Trazabilidad Presupuesto ↔ Pedido
+- `Budget.localOrderId` — ID del `LocalOrder` creado desde este presupuesto
+- `LocalOrder.budgetId` — ID del `Budget` de origen
+- Si el pedido se elimina desde Logística, `localOrderId` se limpia en el presupuesto y el botón "Crear pedido" vuelve a aparecer
+
+---
+
+## Módulos en detalle
+
+### Inventario
+- **Tipos de producto**: sellado, tester (se vende como sellado a precio diferente) y decant\_source
+- **Abrir para decants**: botón que descuenta 1 unidad sellada/tester por FIFO y suma los ML al stock abierto; permite convertir cualquier producto en fuente de decants
+- **Lotes (StockEntry)**: costo USD + cotización → costo PYG; CPP recalculado al agregar lotes
+- **Edición de lotes en cascada**: cambiar precio propaga el delta al movimiento contable y al saldo de la cuenta
+
+### Proveedores
+- Recepción de pedidos: genera `StockEntry` por producto, distribuye el flete proporcionalmente, recalcula CPP
+- **Edición de pedidos recibidos**: modal con cambio de cotización, flete y precios por ítem; cascade completo a stock entries, CPP de productos, movimiento y saldo
+
+### Presupuestos
+- **Tipos de línea**: Sellado, Tester, Decant (tamaños 3/5/10/30ml), Parcial, Personalizado
+- **Auto-llenado**: seleccionar producto + tipo completa descripción y precio sugerido
+- **Análisis de rentabilidad interno** (no aparece en PDF):
+  - Costo estimado por línea según tipo
+  - Ganancia unitaria y margen % con colores de alerta
+  - Totales: costo, ingreso neto con descuento, ganancia estimada, margen general
+- **Export PDF**: diseño con header oscuro/dorado, tabla de ítems, subtotal con descuento, total
+- **Conversión a pedido**: presupuesto aceptado → un click → `LocalOrder` en Logística con ítems y estado Pendiente; frascos para decants se descontarán al preparar (no se pre-cargan en `supplies[]`)
+
+### Logística
+- Validación de stock antes de preparar: unidades selladas, ML abiertos y frascos
+- Al preparar: descuenta stock del producto + FIFO sobre lotes + frascos por ítem decant + crea `DecantBatch`
+- Señas con movimiento contable inmediato; saldo calculado al entregar
+- **Reversión a Pendiente**: restaura ML/stock, elimina DecantBatch, repone frascos en insumos
+
+### Cuentas
+- Historial por cuenta: filtro de mes, resumen ingresos/egresos/saldo del período, tabla de movimientos
+- **Recalcular desde movimientos**: herramienta de corrección que suma todos los movimientos de la cuenta para corregir inconsistencias históricas
+
+### Utilidades
+- **6 KPIs**: utilidad acumulada, utilidad del mes, distribuido, sin distribuir, margen promedio, ticket promedio
+- **Evolución mensual**: tabla con mini-barras de ingresos/costos/ganancia por mes (últimos 12); margen coloreado (verde ≥40%, naranja 20–39%, rojo <20%)
+- **Detalle de ventas**: sección colapsable, filtro por mes en chips, tabla individual por venta con margen %
+- **Distribución**: calculadora con porcentajes configurables; registra distribución por período
+- **Historial de distribuciones clickeable**: modal con ventas del período, desglose de los 3 destinos y métricas
 
 ---
 
 ## Instalación y uso
 
 ### Requisitos previos
-
 - [Node.js](https://nodejs.org/) v18 o superior
 - npm v9 o superior
 
@@ -118,7 +198,7 @@ npm install
 npm run dev
 ```
 
-Abre `http://localhost:5173` en el navegador. La base de datos se crea automáticamente en la primera ejecución con datos semilla (cuentas y frascos por defecto).
+Abre `http://localhost:5173`. La base de datos se crea automáticamente con datos semilla en la primera ejecución: 3 cuentas por defecto y frascos de 3/5/10/30ml.
 
 ### Scripts disponibles
 
@@ -131,32 +211,15 @@ Abre `http://localhost:5173` en el navegador. La base de datos se crea automáti
 
 ---
 
-## Variables de entorno
-
-No se requieren variables de entorno. Toda la configuración del negocio (nombre, teléfono, tipo de cambio) se gestiona desde el módulo **Configuración** dentro de la app.
-
----
-
 ## Consideraciones de despliegue
 
 Al ser una SPA estática sin backend, puede desplegarse en cualquier hosting de archivos estáticos:
 
-- **Vercel** / **Netlify**: conectar el repositorio y configurar build command `npm run build`, output dir `dist`
-- **GitHub Pages**: usar `npm run build` y servir la carpeta `dist/`
-- **Self-hosted**: servir la carpeta `dist/` con Nginx o cualquier servidor HTTP
+- **Vercel / Netlify**: build command `npm run build`, output dir `dist`
+- **GitHub Pages**: `npm run build` → servir `dist/`
+- **Self-hosted**: servir `dist/` con Nginx o cualquier servidor HTTP
 
-> **Importante:** Cada usuario/equipo tiene su propia base de datos local en el navegador. Los datos no se sincronizan entre dispositivos en esta versión.
-
----
-
-## Roadmap
-
-- [ ] Sincronización en la nube (CouchDB / PouchDB o Supabase)
-- [ ] Soporte multi-usuario con roles
-- [ ] App móvil (PWA instalable)
-- [ ] Módulo de clientes (CRM básico)
-- [ ] Integración con WhatsApp Business API para envío de presupuestos
-- [ ] Reportes exportables en Excel
+> **Importante:** Cada navegador/dispositivo tiene su propia base de datos local. Los datos no se sincronizan entre dispositivos en esta versión.
 
 ---
 

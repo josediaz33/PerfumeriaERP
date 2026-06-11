@@ -120,7 +120,7 @@ export function Ventas() {
     } else if (addType === 'decant') {
       const size = parseInt(addSize)
       sizeML = size
-      const cpm = product.costPYG  // Gs/ml (stored per ML for decant_source)
+      const cpm = product.type === 'decant_source' ? product.costPYG : product.costPYG / product.sizeML
       const batch = batches.find(b => b.productId === productId && b.sizeML === size)
       const supplyCost = batch ? (batch.costPerDecant - cpm * size) : 0
       unitCost = cpm * size + supplyCost
@@ -128,7 +128,7 @@ export function Ventas() {
     } else if (addType === 'partial') {
       const ml = parseInt(addPartialML)
       sizeML = ml
-      const cpm = product.costPYG  // Gs/ml (stored per ML for decant_source)
+      const cpm = product.type === 'decant_source' ? product.costPYG : product.costPYG / product.sizeML
       unitCost = cpm * ml
       label = `${product.brand} — ${product.name} ${ml}ml (parcial)`
     }
@@ -332,8 +332,8 @@ export function Ventas() {
     await db.sales.delete(sale.id!)
   }
 
-  const decantProducts = products.filter(p => p.type === 'decant_source')
-  const sealedProducts = products.filter(p => p.type === 'sealed')
+  const decantProducts = products.filter(p => p.stockOpenML > 0)
+  const sealedProducts = products.filter(p => p.type === 'sealed' || p.type === 'tester')
 
   return (
     <div>

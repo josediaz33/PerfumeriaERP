@@ -38,7 +38,7 @@ export interface Movement {
   createdAt: string
 }
 
-export type ProductType = 'sealed' | 'decant_source'
+export type ProductType = 'sealed' | 'tester' | 'decant_source'
 export type Concentration = 'EDP' | 'EDT' | 'EDC' | 'EXP' | 'PARFUM' | 'OTHER'
 export type OlfactiveFamily =
   | 'floral'
@@ -265,6 +265,7 @@ export interface LocalOrder {
   status: LocalOrderStatus
   isPreOrder?: boolean
   advancePayments?: AdvancePayment[]
+  budgetId?: number
   orderDate: string
   estimatedDelivery?: string
   notes?: string
@@ -296,6 +297,7 @@ export interface Budget {
   notes?: string
   status: BudgetStatus
   validUntil?: string
+  localOrderId?: number
   createdAt: string
   updatedAt: string
 }
