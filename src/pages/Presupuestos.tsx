@@ -4,11 +4,13 @@ import { Plus, FileText, Download, X, Edit2, Trash2 } from 'lucide-react'
 import { db } from '../db/db'
 import type { BudgetStatus } from '../db/types'
 import { fmtPYG, fmtDate, nowISO } from '../lib/format'
+import { upsertCustomer } from '../lib/customers'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
 import { Card, CardBody } from '../components/ui/Card'
 import { Modal } from '../components/ui/Modal'
 import { Input, Select, Textarea } from '../components/ui/Input'
+import { CustomerAutocomplete } from '../components/ui/CustomerAutocomplete'
 import { Badge } from '../components/ui/Badge'
 
 const statusColors: Record<BudgetStatus, 'gray' | 'blue' | 'green' | 'red'> = {
@@ -30,6 +32,7 @@ interface BudgetLineItem {
 export function Presupuestos() {
   const products = useLiveQuery(() => db.products.toArray()) ?? []
   const budgets = useLiveQuery(() => db.budgets.orderBy('createdAt').reverse().toArray()) ?? []
+  const customers = useLiveQuery(() => db.customers.orderBy('name').toArray()) ?? []
   const [showNew, setShowNew] = useState(false)
   const [showDetail, setShowDetail] = useState<number | null>(null)
   const [editBudgetId, setEditBudgetId] = useState<number | null>(null)
@@ -97,8 +100,10 @@ export function Presupuestos() {
     const validItems = buildItems()
     if (!validItems.length) return
     const now = nowISO()
+    const customerId = await upsertCustomer(form.customerName, form.customerPhone)
 
     await db.budgets.add({
+      customerId,
       customerName: form.customerName, customerPhone: form.customerPhone || undefined,
       items: validItems,
       subtotal, discount: parseFloat(form.discount) || 0, total,
@@ -114,7 +119,9 @@ export function Presupuestos() {
     if (!editBudgetId || !form.customerName.trim()) return
     const validItems = buildItems()
     if (!validItems.length) return
+    const customerId = await upsertCustomer(form.customerName, form.customerPhone)
     await db.budgets.update(editBudgetId, {
+      customerId,
       customerName: form.customerName, customerPhone: form.customerPhone || undefined,
       items: validItems, subtotal, discount: parseFloat(form.discount) || 0, total,
       notes: form.notes, validUntil: form.validUntil || undefined, updatedAt: nowISO(),
@@ -306,7 +313,13 @@ export function Presupuestos() {
       <Modal isOpen={showNew} onClose={closeModal} title={editBudgetId ? 'Editar presupuesto' : 'Nuevo presupuesto'} size="xl">
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
-            <Input label="Nombre del cliente" value={form.customerName} onChange={e => setForm(f => ({ ...f, customerName: e.target.value }))} />
+            <CustomerAutocomplete
+              label="Nombre del cliente"
+              value={form.customerName}
+              onChange={v => setForm(f => ({ ...f, customerName: v }))}
+              onSelect={c => setForm(f => ({ ...f, customerName: c.name, customerPhone: c.phone ?? f.customerPhone }))}
+              customers={customers}
+            />
             <Input label="Teléfono (opcional)" value={form.customerPhone} onChange={e => setForm(f => ({ ...f, customerPhone: e.target.value }))} />
           </div>
 

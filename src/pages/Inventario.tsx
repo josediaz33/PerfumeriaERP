@@ -40,6 +40,7 @@ const emptyStockForm = {
   quantity: '', costUSD: '', exchangeRate: '7500', shippingCostPYG: '0',
   supplierId: '', date: today(),
   registerPayment: false, paymentAccountId: '',
+  localCurrency: false,
 }
 
 export function Inventario() {
@@ -68,9 +69,11 @@ export function Inventario() {
   const [batchShipping, setBatchShipping] = useState('')
   const [batchNotes, setBatchNotes] = useState('')
   const [batchItems, setBatchItems] = useState<BatchFormItem[]>([emptyBatchItem()])
+  const [batchLocalCurrency, setBatchLocalCurrency] = useState(false)
 
   // Modal editar lote
   const [editLote, setEditLote] = useState<StockEntry | null>(null)
+  const [editLoteIsLocal, setEditLoteIsLocal] = useState(false)
   const [editLoteForm, setEditLoteForm] = useState({
     date: '', quantity: '', costUSD: '', exchangeRate: '7500', shippingCostPYG: '0',
   })
@@ -193,19 +196,21 @@ export function Inventario() {
   function openEditLote(entry: StockEntry) {
     const prod = products.find(p => p.id === entry.productId)
     const isDecant = entry.type === 'decant_source'
+    const isLocal = entry.exchangeRate === 1
     const sizeML = prod?.sizeML ?? 1
     // Display in user-friendly units: bottles for decant, units for sealed
     const displayQty = isDecant ? entry.quantity / sizeML : entry.quantity
-    const displayCostUSD = isDecant ? entry.costUSD * sizeML : entry.costUSD
-    // Total shipping = shippingPerStoredUnit × totalStoredQty (same formula for both types)
+    // For local purchases: costUSD stores the PYG value directly (exchangeRate=1)
+    const displayCost = isDecant ? entry.costUSD * sizeML : entry.costUSD
     const impliedTotalShipping = Math.max(0, Math.round(
       (entry.costPYG - entry.costUSD * entry.exchangeRate) * entry.quantity
     ))
     setEditLote(entry)
+    setEditLoteIsLocal(isLocal)
     setEditLoteForm({
       date: entry.date,
       quantity: String(displayQty),
-      costUSD: String(displayCostUSD),
+      costUSD: String(displayCost),
       exchangeRate: String(entry.exchangeRate),
       shippingCostPYG: String(impliedTotalShipping),
     })
@@ -297,7 +302,7 @@ export function Inventario() {
     const validItems = batchItems.filter(i => i.productId && i.bottles && i.costUSD)
     if (validItems.length === 0) return
 
-    const rate = parseFloat(batchRate) || 7500
+    const rate = batchLocalCurrency ? 1 : (parseFloat(batchRate) || 7500)
     const totalShipping = parseFloat(batchShipping) || 0
     const now = nowISO()
 
@@ -366,6 +371,7 @@ export function Inventario() {
     setBatchItems([emptyBatchItem()])
     setBatchShipping('')
     setBatchNotes('')
+    setBatchLocalCurrency(false)
   }
 
   async function handleAddStock() {
@@ -373,15 +379,17 @@ export function Inventario() {
     if (!product || !stockForm.quantity || !stockForm.costUSD) return
 
     const isDecant = product.type === 'decant_source'
+    const isLocal = stockForm.localCurrency
     const sizeML = product.sizeML || 1
     const formQty = parseFloat(stockForm.quantity) // bottles for decant, units for sealed
-    const costUSD_input = parseFloat(stockForm.costUSD) // per bottle for decant, per unit for sealed
-    const exchangeRate = parseFloat(stockForm.exchangeRate) || 7500
+    const costInput = parseFloat(stockForm.costUSD) // per bottle/unit (PYG if local, USD if not)
+    const exchangeRate = isLocal ? 1 : (parseFloat(stockForm.exchangeRate) || 7500)
     const shippingTotal = parseFloat(stockForm.shippingCostPYG) || 0
 
     // Convert to stored units (ML for decant, units for sealed)
     const qty = isDecant ? formQty * sizeML : formQty
-    const costUSD = isDecant ? costUSD_input / sizeML : costUSD_input
+    // For local: costUSD field stores PYG per bottle, so stored costUSD = costPYG/sizeML (rate=1 makes math identical)
+    const costUSD = isDecant ? costInput / sizeML : costInput
     const shippingPerBottle = formQty > 0 ? shippingTotal / formQty : 0
     const shippingPerStoredUnit = isDecant ? shippingPerBottle / sizeML : shippingPerBottle
     const batchCostPYG = costUSD * exchangeRate + shippingPerStoredUnit
@@ -445,8 +453,8 @@ export function Inventario() {
   const isDecantStock = stockProduct?.type === 'decant_source'
   const decantSizeML = stockProduct?.sizeML || 1
   const stockQty = parseFloat(stockForm.quantity) || 0  // bottles or units (user input)
-  const stockCostUSD = parseFloat(stockForm.costUSD) || 0  // per bottle or per unit
-  const stockRate = parseFloat(stockForm.exchangeRate) || 7500
+  const stockCostUSD = parseFloat(stockForm.costUSD) || 0  // per bottle or per unit (PYG if localCurrency)
+  const stockRate = stockForm.localCurrency ? 1 : (parseFloat(stockForm.exchangeRate) || 7500)
   const stockShipping = parseFloat(stockForm.shippingCostPYG) || 0
   // Per-stored-unit cost (per ML for decant, per unit for sealed)
   const stockCostUSDStored = isDecantStock ? stockCostUSD / decantSizeML : stockCostUSD
@@ -893,17 +901,21 @@ export function Inventario() {
                 )}
               </div>
               <Input
-                label={isDecantEditLote ? 'Costo USD por botella' : 'Costo USD por unidad'}
+                label={isDecantEditLote
+                  ? (editLoteIsLocal ? 'Costo Gs. por botella' : 'Costo USD por botella')
+                  : (editLoteIsLocal ? 'Costo Gs. por unidad' : 'Costo USD por unidad')}
                 type="number"
                 value={editLoteForm.costUSD}
                 onChange={e => setEditLoteForm(f => ({ ...f, costUSD: e.target.value }))}
               />
-              <Input
-                label="Cotización USD/PYG"
-                type="number"
-                value={editLoteForm.exchangeRate}
-                onChange={e => setEditLoteForm(f => ({ ...f, exchangeRate: e.target.value }))}
-              />
+              {!editLoteIsLocal && (
+                <Input
+                  label="Cotización USD/PYG"
+                  type="number"
+                  value={editLoteForm.exchangeRate}
+                  onChange={e => setEditLoteForm(f => ({ ...f, exchangeRate: e.target.value }))}
+                />
+              )}
               <div>
                 <Input
                   label="Envío total del lote (Gs.)"
@@ -928,8 +940,10 @@ export function Inventario() {
                 <div className="grid grid-cols-2 gap-x-6 text-sm">
                   <span className="text-gray-500">Costo base:</span>
                   <span className="text-gray-700 text-right">
-                    {fmtUSD(editLoteCostUSD)} × {editLoteRate.toLocaleString('es-PY')} = {fmtPYG(Math.round(editLoteCostUSD * editLoteRate))}
-                    {isDecantEditLote && <span className="text-gray-400 text-xs"> / bot.</span>}
+                    {editLoteIsLocal
+                      ? <>{fmtPYG(Math.round(editLoteCostUSD))}{isDecantEditLote && <span className="text-gray-400 text-xs"> / bot.</span>}</>
+                      : <>{fmtUSD(editLoteCostUSD)} × {editLoteRate.toLocaleString('es-PY')} = {fmtPYG(Math.round(editLoteCostUSD * editLoteRate))}{isDecantEditLote && <span className="text-gray-400 text-xs"> / bot.</span>}</>
+                    }
                   </span>
                   {editLoteShipping > 0 && (
                     <>
@@ -965,9 +979,22 @@ export function Inventario() {
       {/* ── Modal Lote de Envío (multi-producto) ── */}
       <Modal isOpen={showBatch} onClose={() => setShowBatch(false)} title="Nuevo lote de envío" size="xl">
         <div className="space-y-4">
-          <div className="grid grid-cols-3 gap-4">
+          {/* Toggle moneda */}
+          <label className="flex items-center gap-3 cursor-pointer select-none">
+            <div
+              onClick={() => setBatchLocalCurrency(v => !v)}
+              className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${batchLocalCurrency ? 'bg-green-500' : 'bg-gray-200'}`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${batchLocalCurrency ? 'translate-x-5' : ''}`} />
+            </div>
+            <p className="text-sm font-medium text-gray-700">Compra en Guaraníes (proveedor local)</p>
+          </label>
+
+          <div className={`grid gap-4 ${batchLocalCurrency ? 'grid-cols-2' : 'grid-cols-3'}`}>
             <Input label="Fecha" type="date" value={batchDate} onChange={e => setBatchDate(e.target.value)} />
-            <Input label="Cotización USD/PYG" type="number" value={batchRate} onChange={e => setBatchRate(e.target.value)} />
+            {!batchLocalCurrency && (
+              <Input label="Cotización USD/PYG" type="number" value={batchRate} onChange={e => setBatchRate(e.target.value)} />
+            )}
             <Select
               label="Proveedor (opcional)"
               value={batchSupplierId}
@@ -994,7 +1021,7 @@ export function Inventario() {
                 const isDecantItem = itemProd?.type === 'decant_source'
                 const itemFormQty = parseFloat(item.bottles) || 0
                 const itemCostUSD = parseFloat(item.costUSD) || 0
-                const itemRate = parseFloat(batchRate) || 7500
+                const itemRate = batchLocalCurrency ? 1 : (parseFloat(batchRate) || 7500)
                 const totalShip = parseFloat(batchShipping) || 0
                 // Compute proportional shipping preview for this item
                 const allValid = batchItems.filter(i => i.productId && i.bottles && i.costUSD)
@@ -1029,7 +1056,7 @@ export function Inventario() {
                     />
                     <input
                       type="number"
-                      placeholder={`USD/${isDecantItem ? 'bot.' : 'u.'}`}
+                      placeholder={batchLocalCurrency ? `Gs./${isDecantItem ? 'bot.' : 'u.'}` : `USD/${isDecantItem ? 'bot.' : 'u.'}`}
                       className="w-24 text-sm border border-gray-200 rounded-lg px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-violet-500"
                       value={item.costUSD}
                       onChange={e => setBatchItems(items => items.map((it, i) => i === idx ? { ...it, costUSD: e.target.value } : it))}
@@ -1099,10 +1126,24 @@ export function Inventario() {
             />
           )}
 
+          {/* Toggle moneda */}
+          <label className="flex items-center gap-3 cursor-pointer select-none">
+            <div
+              onClick={() => setStockForm(f => ({ ...f, localCurrency: !f.localCurrency }))}
+              className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${stockForm.localCurrency ? 'bg-green-500' : 'bg-gray-200'}`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${stockForm.localCurrency ? 'translate-x-5' : ''}`} />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-700">Compra en Guaraníes (proveedor local)</p>
+              {stockForm.localCurrency && <p className="text-xs text-green-600">Ingresá el precio directamente en Gs., sin tipo de cambio.</p>}
+            </div>
+          </label>
+
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Input
-                label={isDecantStock ? `Botellas recibidas` : 'Cantidad (u.)'}
+                label={isDecantStock ? 'Botellas recibidas' : 'Cantidad (u.)'}
                 type="number"
                 value={stockForm.quantity}
                 onChange={e => setStockForm(f => ({ ...f, quantity: e.target.value }))}
@@ -1113,13 +1154,17 @@ export function Inventario() {
               )}
             </div>
             <Input
-              label={isDecantStock ? 'Costo USD por botella' : 'Costo USD por unidad'}
+              label={isDecantStock
+                ? (stockForm.localCurrency ? 'Costo Gs. por botella' : 'Costo USD por botella')
+                : (stockForm.localCurrency ? 'Costo Gs. por unidad' : 'Costo USD por unidad')}
               type="number" value={stockForm.costUSD}
               onChange={e => setStockForm(f => ({ ...f, costUSD: e.target.value }))}
-              placeholder="0.00"
+              placeholder="0"
             />
-            <Input label="Cotización USD/PYG" type="number" value={stockForm.exchangeRate} onChange={e => setStockForm(f => ({ ...f, exchangeRate: e.target.value }))} />
-            <div>
+            {!stockForm.localCurrency && (
+              <Input label="Cotización USD/PYG" type="number" value={stockForm.exchangeRate} onChange={e => setStockForm(f => ({ ...f, exchangeRate: e.target.value }))} />
+            )}
+            <div className={stockForm.localCurrency ? 'col-span-2' : ''}>
               <Input label="Envío total del lote (Gs.)" type="number" value={stockForm.shippingCostPYG} onChange={e => setStockForm(f => ({ ...f, shippingCostPYG: e.target.value }))} placeholder="0" />
               {stockShipping > 0 && stockQty > 0 && (
                 <p className="text-xs text-violet-600 mt-1">

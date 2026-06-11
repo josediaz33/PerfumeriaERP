@@ -13,6 +13,7 @@ import { Proveedores } from './pages/Proveedores'
 import { Logistica } from './pages/Logistica'
 import { Catalogo } from './pages/Catalogo'
 import { Presupuestos } from './pages/Presupuestos'
+import { Clientes } from './pages/Clientes'
 import { Utilidades } from './pages/Utilidades'
 import { Configuracion } from './pages/Configuracion'
 
@@ -33,6 +34,7 @@ export default function App() {
           <Route path="/logistica" element={<Logistica />} />
           <Route path="/catalogo" element={<Catalogo />} />
           <Route path="/presupuestos" element={<Presupuestos />} />
+          <Route path="/clientes" element={<Clientes />} />
           <Route path="/utilidades" element={<Utilidades />} />
           <Route path="/configuracion" element={<Configuracion />} />
         </Route>

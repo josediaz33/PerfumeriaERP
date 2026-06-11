@@ -10,6 +10,7 @@ import {
   MapPin,
   BookImage,
   FileText,
+  Users,
   TrendingUp,
   Settings,
 } from 'lucide-react'
@@ -23,6 +24,7 @@ const nav = [
   { to: '/ventas', label: 'Ventas', icon: ShoppingCart },
   { to: '/proveedores', label: 'Proveedores', icon: Truck },
   { to: '/logistica', label: 'Logística', icon: MapPin },
+  { to: '/clientes', label: 'Clientes', icon: Users },
   { to: '/catalogo', label: 'Catálogo', icon: BookImage },
   { to: '/presupuestos', label: 'Presupuestos', icon: FileText },
   { to: '/utilidades', label: 'Utilidades', icon: TrendingUp },

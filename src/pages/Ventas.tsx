@@ -4,11 +4,13 @@ import { Plus, ShoppingCart, Search, X, TrendingUp, Edit2, Trash2, ChevronDown, 
 import { db } from '../db/db'
 import type { PaymentMethod, SaleItemType, Sale } from '../db/types'
 import { fmtPYG, fmtDate, today, nowISO } from '../lib/format'
+import { upsertCustomer } from '../lib/customers'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
 import { Card, CardBody } from '../components/ui/Card'
 import { Modal } from '../components/ui/Modal'
 import { Input, Select, Textarea } from '../components/ui/Input'
+import { CustomerAutocomplete } from '../components/ui/CustomerAutocomplete'
 import { Badge } from '../components/ui/Badge'
 
 const paymentLabels: Record<PaymentMethod, string> = {
@@ -38,6 +40,7 @@ export function Ventas() {
   const allSaleItems = useLiveQuery(() => db.saleItems.toArray()) ?? []
   const allStockEntries = useLiveQuery(() => db.stockEntries.orderBy('date').toArray()) ?? []
   const allSupplies = useLiveQuery(() => db.supplies.toArray()) ?? []
+  const customers = useLiveQuery(() => db.customers.orderBy('name').toArray()) ?? []
 
   const [filterDate, setFilterDate] = useState(() => today().slice(0, 7))
   const [search, setSearch] = useState('')
@@ -155,8 +158,10 @@ export function Ventas() {
   async function handleCreateOrder() {
     if (!cart.length || !customerName.trim()) return
     const now = nowISO()
+    const customerId = await upsertCustomer(customerName, customerPhone)
 
     await db.localOrders.add({
+      customerId,
       customerName: customerName.trim(),
       customerPhone: customerPhone.trim() || undefined,
       customerAddress: undefined,
@@ -527,7 +532,13 @@ export function Ventas() {
         <div className="space-y-4">
           {/* Cliente */}
           <div className="grid grid-cols-2 gap-3">
-            <Input label="Nombre del cliente" value={customerName} onChange={e => setCustomerName(e.target.value)} />
+            <CustomerAutocomplete
+              label="Nombre del cliente"
+              value={customerName}
+              onChange={setCustomerName}
+              onSelect={c => { setCustomerName(c.name); setCustomerPhone(c.phone ?? '') }}
+              customers={customers}
+            />
             <Input label="Teléfono (opcional)" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} />
           </div>
           {/* Agregar producto */}

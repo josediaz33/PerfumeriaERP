@@ -82,6 +82,7 @@ export interface StockEntry {
   productId: number
   supplierId?: number
   shipmentBatchId?: number
+  orderId?: number
   quantity: number
   quantityRemaining?: number
   costUSD: number
@@ -171,6 +172,7 @@ export interface Sale {
 export interface Customer {
   id?: number
   name: string
+  ci?: string
   phone?: string
   address?: string
   notes?: string
@@ -215,6 +217,8 @@ export interface Order {
   totalUSD: number
   exchangeRate: number
   totalPYG: number
+  shippingTotalPYG?: number
+  localCurrency?: boolean
   status: OrderStatus
   orderDate: string
   estimatedArrival?: string
@@ -238,6 +242,14 @@ export interface LocalOrderSupply {
   unitCost: number
 }
 
+export interface AdvancePayment {
+  amount: number
+  date: string
+  method: PaymentMethod
+  accountId: number
+  notes?: string
+}
+
 export interface LocalOrder {
   id?: number
   customerId?: number
@@ -251,6 +263,8 @@ export interface LocalOrder {
   totalAmount: number
   totalCost: number
   status: LocalOrderStatus
+  isPreOrder?: boolean
+  advancePayments?: AdvancePayment[]
   orderDate: string
   estimatedDelivery?: string
   notes?: string

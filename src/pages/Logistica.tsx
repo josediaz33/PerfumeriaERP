@@ -2,13 +2,15 @@ import { useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { Plus, MapPin, Package, Check, Clock, Truck, X as XIcon, Edit2, Trash2, AlertTriangle } from 'lucide-react'
 import { db } from '../db/db'
-import type { LocalOrderStatus, PaymentMethod } from '../db/types'
+import type { LocalOrderStatus, PaymentMethod, Supply, AdvancePayment } from '../db/types'
 import { fmtPYG, fmtDate, today, nowISO } from '../lib/format'
+import { upsertCustomer } from '../lib/customers'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
 import { Card, CardBody } from '../components/ui/Card'
 import { Modal } from '../components/ui/Modal'
 import { Input, Select, Textarea } from '../components/ui/Input'
+import { CustomerAutocomplete } from '../components/ui/CustomerAutocomplete'
 import { Badge } from '../components/ui/Badge'
 
 const statusColors: Record<LocalOrderStatus, 'yellow' | 'blue' | 'green' | 'gray' | 'red'> = {
@@ -23,11 +25,17 @@ const statusIcons: Record<LocalOrderStatus, typeof Clock> = {
 
 const statusFlow: LocalOrderStatus[] = ['pending', 'preparing', 'ready', 'delivered']
 
+function findSupplyForSize(supplyList: Supply[], sizeML: number): Supply | undefined {
+  return supplyList.find(s => s.sizeML === sizeML)
+    ?? supplyList.find(s => (s.type as string) === `${sizeML}ml`)
+}
+
 export function Logistica() {
   const products = useLiveQuery(() => db.products.toArray()) ?? []
   const supplies = useLiveQuery(() => db.supplies.toArray()) ?? []
   const orders = useLiveQuery(() => db.localOrders.orderBy('orderDate').reverse().toArray()) ?? []
   const accounts = useLiveQuery(() => db.accounts.filter(a => a.isActive !== false).toArray()) ?? []
+  const customers = useLiveQuery(() => db.customers.orderBy('name').toArray()) ?? []
 
   const [filterStatus, setFilterStatus] = useState<LocalOrderStatus | 'all'>('all')
   const [showNew, setShowNew] = useState(false)
@@ -43,10 +51,16 @@ export function Logistica() {
   const [supplyErrors, setSupplyErrors] = useState<string[]>([])
   const [prepErrors, setPrepErrors] = useState<string[]>([])
 
+  // Seña (pago parcial anticipado)
+  const [showSeña, setShowSeña] = useState(false)
+  const [señaOrderId, setSeñaOrderId] = useState<number | null>(null)
+  const [señaForm, setSeñaForm] = useState({ amount: '', method: 'cash' as PaymentMethod, accountId: '', date: today(), notes: '' })
+
   const emptyForm = {
     customerName: '', customerPhone: '', customerAddress: '',
     shippingCost: '0', shippingPaidBy: 'customer' as 'customer' | 'business',
     orderDate: today(), estimatedDelivery: '', notes: '',
+    isPreOrder: false,
     items: [{ productId: '0', type: 'sealed' as 'sealed' | 'decant' | 'partial', sizeML: '5', quantity: '1', unitPrice: '' }],
     supplies: [] as { supplyId: string; quantity: string }[],
   }
@@ -74,6 +88,7 @@ export function Logistica() {
       shippingCost: String(order.shippingCost), shippingPaidBy: order.shippingPaidBy,
       orderDate: order.orderDate, estimatedDelivery: order.estimatedDelivery ?? '',
       notes: order.notes ?? '',
+      isPreOrder: order.isPreOrder ?? false,
       items: order.items.map(i => ({
         productId: String(i.productId), type: i.type,
         sizeML: String(i.sizeML ?? 5), quantity: String(i.quantity), unitPrice: String(i.unitPrice),
@@ -98,7 +113,7 @@ export function Logistica() {
         if (product.stockOpenML < mlNeeded) {
           errors.push(`${product.brand} — ${product.name}: ML insuficientes (${product.stockOpenML}ml disponibles, se necesitan ${mlNeeded}ml)`)
         }
-        const supply = supplies.find(s => s.sizeML === item.sizeML)
+        const supply = findSupplyForSize(supplies, item.sizeML)
         if (!supply) {
           errors.push(`No hay frasco registrado para decants de ${item.sizeML}ml`)
         } else if (supply.stock < item.quantity) {
@@ -120,7 +135,7 @@ export function Logistica() {
       if (item.type === 'decant') {
         const sizeML = parseInt(item.sizeML)
         const qty = parseInt(item.quantity) || 1
-        const supply = supplies.find(s => s.sizeML === sizeML)
+        const supply = findSupplyForSize(supplies, sizeML)
         if (!supply) {
           errors.push(`No hay insumo registrado para frascos de ${sizeML}ml`)
         } else if (supply.stock < qty) {
@@ -136,8 +151,10 @@ export function Logistica() {
     const validItems = form.items.filter(i => i.productId !== '0' && i.unitPrice)
     if (!validItems.length) return
 
-    const errors = validateSupplies(validItems)
-    if (errors.length > 0) { setSupplyErrors(errors); return }
+    if (!form.isPreOrder) {
+      const errors = validateSupplies(validItems)
+      if (errors.length > 0) { setSupplyErrors(errors); return }
+    }
     setSupplyErrors([])
 
     const now = nowISO()
@@ -162,14 +179,16 @@ export function Logistica() {
       }),
       shippingCost: shipping, shippingPaidBy: form.shippingPaidBy,
       totalAmount, totalCost,
+      isPreOrder: form.isPreOrder || undefined,
       orderDate: form.orderDate, estimatedDelivery: form.estimatedDelivery || undefined,
       notes: form.notes, updatedAt: now,
     }
 
+    const customerId = await upsertCustomer(form.customerName, form.customerPhone, form.customerAddress)
     if (editOrderId) {
-      await db.localOrders.update(editOrderId, orderData)
+      await db.localOrders.update(editOrderId, { ...orderData, customerId })
     } else {
-      await db.localOrders.add({ ...orderData, status: 'pending', createdAt: now })
+      await db.localOrders.add({ ...orderData, customerId, status: 'pending', createdAt: now })
     }
 
     setForm(emptyForm)
@@ -177,12 +196,54 @@ export function Logistica() {
     setShowNew(false)
   }
 
+  function openSeña(orderId: number) {
+    setSeñaOrderId(orderId)
+    setSeñaForm({ amount: '', method: 'cash', accountId: accounts[0] ? String(accounts[0].id) : '', date: today(), notes: '' })
+    setShowSeña(true)
+  }
+
+  async function handleAddSeña() {
+    if (!señaOrderId || !señaForm.amount || !señaForm.accountId) return
+    const order = orders.find(o => o.id === señaOrderId)
+    if (!order) return
+    const amount = parseFloat(señaForm.amount)
+    if (!amount || amount <= 0) return
+    const now = nowISO()
+    const newSeña: AdvancePayment = { amount, date: señaForm.date, method: señaForm.method, accountId: parseInt(señaForm.accountId), notes: señaForm.notes || undefined }
+    const updatedSeñas = [...(order.advancePayments ?? []), newSeña]
+    await db.transaction('rw', [db.localOrders, db.accounts, db.movements], async () => {
+      await db.movements.add({
+        type: 'income', category: 'sale',
+        amount,
+        accountId: parseInt(señaForm.accountId),
+        description: `Seña — ${order.customerName}`,
+        referenceId: señaOrderId!, referenceType: 'local_order',
+        date: señaForm.date, createdAt: now,
+      })
+      await db.accounts.where('id').equals(parseInt(señaForm.accountId)).modify(a => { a.balance += amount })
+      await db.localOrders.update(señaOrderId!, { advancePayments: updatedSeñas, updatedAt: now })
+    })
+    setShowSeña(false)
+    setSeñaOrderId(null)
+  }
+
   async function handleDeleteOrder(order: typeof orders[0]) {
     const now = nowISO()
 
     if (order.status === 'pending') {
-      if (!confirm(`¿Eliminar el pedido de ${order.customerName}?`)) return
-      await db.localOrders.delete(order.id!)
+      const hasSeñas = (order.advancePayments?.length ?? 0) > 0
+      const msg = hasSeñas
+        ? `Este pedido tiene señas registradas (${fmtPYG(order.advancePayments!.reduce((s, p) => s + p.amount, 0))}). ¿Eliminar y revertir los cobros?`
+        : `¿Eliminar el pedido de ${order.customerName}?`
+      if (!confirm(msg)) return
+      await db.transaction('rw', [db.localOrders, db.accounts, db.movements], async () => {
+        for (const seña of order.advancePayments ?? []) {
+          await db.accounts.where('id').equals(seña.accountId).modify(a => { a.balance -= seña.amount })
+        }
+        const movs = await db.movements.where('referenceId').equals(order.id!).filter(m => m.referenceType === 'local_order').toArray()
+        for (const m of movs) if (m.id) await db.movements.delete(m.id)
+        await db.localOrders.delete(order.id!)
+      })
       setShowDetail(null)
       return
     }
@@ -301,7 +362,8 @@ export function Logistica() {
               await db.stockEntries.update(lot.id!, { quantityRemaining: avail - deduct })
               mlLeft -= deduct
             }
-            const supply = await db.supplies.where('sizeML').equals(sizeML).first()
+            let supply = await db.supplies.where('sizeML').equals(sizeML).first()
+            if (!supply) supply = await db.supplies.filter(s => (s.type as string) === `${sizeML}ml`).first()
             if (supply?.id) await db.supplies.update(supply.id, { stock: Math.max(0, supply.stock - item.quantity), updatedAt: now })
             const cpm = product.costPYG  // Gs/ml (stored per ML for decant_source)
             await db.decantBatches.add({
@@ -397,6 +459,9 @@ export function Logistica() {
     const totalCost = order.items.reduce((s, item, i) => s + itemCosts[i] * item.quantity, 0)
     const totalProfit = order.totalAmount - totalCost
 
+    const señaTotal = (order.advancePayments ?? []).reduce((s, p) => s + p.amount, 0)
+    const saldo = Math.max(0, order.totalAmount - señaTotal)
+
     await db.transaction('rw', [db.localOrders, db.accounts, db.movements, db.sales, db.saleItems], async () => {
       const saleId = await db.sales.add({
         items: [],
@@ -405,6 +470,7 @@ export function Logistica() {
         totalProfit,
         paymentMethod: payMethod,
         accountId: parseInt(payAccountId),
+        customerId: order.customerId,
         customerName: order.customerName,
         referenceType: 'local_order',
         referenceId: pendingDeliveryId!,
@@ -426,15 +492,17 @@ export function Logistica() {
           profit: (item.unitPrice - unitCost) * item.quantity,
         })
       }
-      await db.movements.add({
-        type: 'income', category: 'sale',
-        amount: order.totalAmount,
-        accountId: parseInt(payAccountId),
-        description: `Pedido — ${order.customerName} (${order.items.length} producto(s))`,
-        referenceId: pendingDeliveryId!, referenceType: 'local_order',
-        date: today(), createdAt: now,
-      })
-      await db.accounts.where('id').equals(parseInt(payAccountId)).modify(a => { a.balance += order.totalAmount })
+      if (saldo > 0) {
+        await db.movements.add({
+          type: 'income', category: 'sale',
+          amount: saldo,
+          accountId: parseInt(payAccountId),
+          description: `Entrega — ${order.customerName}${señaTotal > 0 ? ` (saldo, seña: ${fmtPYG(señaTotal)})` : ''}`,
+          referenceId: pendingDeliveryId!, referenceType: 'local_order',
+          date: today(), createdAt: now,
+        })
+        await db.accounts.where('id').equals(parseInt(payAccountId)).modify(a => { a.balance += saldo })
+      }
       await db.localOrders.update(pendingDeliveryId!, { status: 'delivered', updatedAt: now })
     })
     setShowPaymentModal(false)
@@ -501,15 +569,32 @@ export function Logistica() {
                         <StatusIcon size={18} className={o.status === 'pending' ? 'text-yellow-600' : o.status === 'preparing' ? 'text-blue-600' : o.status === 'ready' ? 'text-violet-600' : o.status === 'delivered' ? 'text-green-600' : 'text-gray-400'} />
                       </div>
                       <div>
-                        <p className="font-semibold text-gray-900">{o.customerName}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="font-semibold text-gray-900">{o.customerName}</p>
+                          {o.isPreOrder && <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-medium">Pre-pedido</span>}
+                          {(o.advancePayments?.length ?? 0) > 0 && (
+                            <span className="text-xs bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded font-medium">
+                              Seña {fmtPYG(o.advancePayments!.reduce((s, p) => s + p.amount, 0))}
+                            </span>
+                          )}
+                        </div>
                         <p className="text-sm text-gray-500">{fmtDate(o.orderDate)} {o.customerPhone && `· ${o.customerPhone}`}</p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
                       <div className="text-right">
                         <p className="font-semibold text-gray-900">{fmtPYG(o.totalAmount)}</p>
                         <Badge color={statusColors[o.status]}>{statusLabels[o.status]}</Badge>
                       </div>
+                      {o.status !== 'delivered' && o.status !== 'cancelled' && (
+                        <button
+                          onClick={e => { e.stopPropagation(); openSeña(o.id!) }}
+                          className="p-1.5 rounded-lg text-gray-300 hover:text-violet-500 hover:bg-violet-50 transition-colors"
+                          title="Registrar seña"
+                        >
+                          <span className="text-xs font-bold">$½</span>
+                        </button>
+                      )}
                       {canAdvance && (
                         <Button
                           size="sm"
@@ -537,7 +622,13 @@ export function Logistica() {
       <Modal isOpen={showNew} onClose={() => setShowNew(false)} title={editOrderId ? 'Editar pedido' : 'Nuevo pedido'} size="xl">
         <div className="space-y-4">
           <div className="grid grid-cols-3 gap-4">
-            <Input label="Nombre del cliente" value={form.customerName} onChange={e => setForm(f => ({ ...f, customerName: e.target.value }))} />
+            <CustomerAutocomplete
+              label="Nombre del cliente"
+              value={form.customerName}
+              onChange={v => setForm(f => ({ ...f, customerName: v }))}
+              onSelect={c => setForm(f => ({ ...f, customerName: c.name, customerPhone: c.phone ?? f.customerPhone, customerAddress: c.address ?? f.customerAddress }))}
+              customers={customers}
+            />
             <Input label="Teléfono" value={form.customerPhone} onChange={e => setForm(f => ({ ...f, customerPhone: e.target.value }))} />
             <Input label="Dirección" value={form.customerAddress} onChange={e => setForm(f => ({ ...f, customerAddress: e.target.value }))} />
           </div>
@@ -600,6 +691,20 @@ export function Logistica() {
             <Input label="Entrega estimada" type="date" value={form.estimatedDelivery} onChange={e => setForm(f => ({ ...f, estimatedDelivery: e.target.value }))} />
           </div>
           <Textarea label="Notas" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2} />
+
+          <label className="flex items-center gap-3 cursor-pointer select-none">
+            <div
+              onClick={() => setForm(f => ({ ...f, isPreOrder: !f.isPreOrder }))}
+              className={`relative w-10 h-5 rounded-full transition-colors ${form.isPreOrder ? 'bg-orange-400' : 'bg-gray-200'}`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${form.isPreOrder ? 'translate-x-5' : ''}`} />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-700">Pre-pedido (sin stock disponible)</p>
+              {form.isPreOrder && <p className="text-xs text-orange-600">No se validará stock al crear. Validará cuando pase a "Preparar".</p>}
+            </div>
+          </label>
+
           {supplyErrors.length > 0 && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-3 space-y-1">
               {supplyErrors.map((e, idx) => (
@@ -636,34 +741,62 @@ export function Logistica() {
         {pendingDeliveryId && (() => {
           const ord = orders.find(o => o.id === pendingDeliveryId)
           if (!ord) return null
+          const señaTotal = (ord.advancePayments ?? []).reduce((s, p) => s + p.amount, 0)
+          const saldo = Math.max(0, ord.totalAmount - señaTotal)
           return (
             <div className="space-y-4">
-              <div className="bg-green-50 border border-green-100 rounded-xl p-4">
+              <div className="bg-green-50 border border-green-100 rounded-xl p-4 space-y-2">
                 <p className="text-sm font-medium text-green-700">{ord.customerName}</p>
-                <p className="text-2xl font-bold text-green-800 mt-1">{fmtPYG(ord.totalAmount)}</p>
-                <p className="text-xs text-green-600 mt-1">{ord.items.length} producto(s) · {fmtDate(ord.orderDate)}</p>
+                <div className="flex justify-between text-sm">
+                  <span className="text-green-600">Total del pedido</span>
+                  <span className="font-bold text-green-800">{fmtPYG(ord.totalAmount)}</span>
+                </div>
+                {señaTotal > 0 && (
+                  <>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-green-600">Señas ya cobradas</span>
+                      <span className="text-green-700">− {fmtPYG(señaTotal)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm border-t border-green-200 pt-2">
+                      <span className="font-semibold text-green-700">Saldo a cobrar ahora</span>
+                      <span className="text-xl font-bold text-green-800">{fmtPYG(saldo)}</span>
+                    </div>
+                    {(ord.advancePayments ?? []).map((p, i) => (
+                      <p key={i} className="text-xs text-green-500">{fmtDate(p.date)} · {fmtPYG(p.amount)} · {p.method}</p>
+                    ))}
+                  </>
+                )}
+                {señaTotal === 0 && <p className="text-xs text-green-600">{ord.items.length} producto(s) · {fmtDate(ord.orderDate)}</p>}
               </div>
-              <Select
-                label="Cobrar en cuenta"
-                value={payAccountId}
-                onChange={e => setPayAccountId(e.target.value)}
-                options={[{ value: '', label: 'Seleccionar cuenta...' }, ...accounts.map(a => ({ value: String(a.id), label: `${a.name} — ${fmtPYG(a.balance)}` }))]}
-              />
-              <Select
-                label="Método de pago"
-                value={payMethod}
-                onChange={e => setPayMethod(e.target.value as PaymentMethod)}
-                options={[
-                  { value: 'cash', label: 'Efectivo' },
-                  { value: 'transfer', label: 'Transferencia' },
-                  { value: 'card', label: 'Tarjeta' },
-                  { value: 'other', label: 'Otro' },
-                ]}
-              />
+              {saldo > 0 ? (
+                <>
+                  <Select
+                    label="Cobrar saldo en cuenta"
+                    value={payAccountId}
+                    onChange={e => setPayAccountId(e.target.value)}
+                    options={[{ value: '', label: 'Seleccionar cuenta...' }, ...accounts.map(a => ({ value: String(a.id), label: `${a.name} — ${fmtPYG(a.balance)}` }))]}
+                  />
+                  <Select
+                    label="Método de pago"
+                    value={payMethod}
+                    onChange={e => setPayMethod(e.target.value as PaymentMethod)}
+                    options={[
+                      { value: 'cash', label: 'Efectivo' },
+                      { value: 'transfer', label: 'Transferencia' },
+                      { value: 'card', label: 'Tarjeta' },
+                      { value: 'other', label: 'Otro' },
+                    ]}
+                  />
+                </>
+              ) : (
+                <div className="bg-violet-50 rounded-lg p-3 text-sm text-violet-700 text-center font-medium">
+                  Pagado completamente con señas. Solo se registrará la entrega.
+                </div>
+              )}
               <div className="flex gap-2 pt-2">
                 <Button variant="secondary" className="flex-1" onClick={() => { setShowPaymentModal(false); setPendingDeliveryId(null) }}>Cancelar</Button>
-                <Button className="flex-1" onClick={handleDeliveryPayment} disabled={!payAccountId}>
-                  Confirmar entrega y cobro
+                <Button className="flex-1" onClick={handleDeliveryPayment} disabled={saldo > 0 && !payAccountId}>
+                  Confirmar entrega{saldo > 0 ? ` y cobrar ${fmtPYG(saldo)}` : ''}
                 </Button>
               </div>
             </div>
@@ -697,9 +830,33 @@ export function Logistica() {
               <div className="flex justify-between"><span className="text-gray-500">Total venta</span><span className="font-bold">{fmtPYG(selectedOrder.totalAmount)}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Costo insumos+envío</span><span className="text-gray-700">{fmtPYG(selectedOrder.totalCost)}</span></div>
               <div className="flex justify-between"><span className="text-green-600 font-medium">Margen</span><span className="font-bold text-green-700">{fmtPYG(selectedOrder.totalAmount - selectedOrder.totalCost)}</span></div>
+              {(selectedOrder.advancePayments?.length ?? 0) > 0 && (() => {
+                const señaTotal = selectedOrder.advancePayments!.reduce((s, p) => s + p.amount, 0)
+                return (
+                  <>
+                    <div className="border-t border-gray-200 pt-1 mt-1">
+                      {selectedOrder.advancePayments!.map((p, i) => (
+                        <div key={i} className="flex justify-between text-xs text-violet-600">
+                          <span>Seña {fmtDate(p.date)} ({p.method})</span>
+                          <span>{fmtPYG(p.amount)}</span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between font-semibold text-violet-700 mt-1">
+                        <span>Saldo pendiente</span>
+                        <span>{fmtPYG(Math.max(0, selectedOrder.totalAmount - señaTotal))}</span>
+                      </div>
+                    </div>
+                  </>
+                )
+              })()}
             </div>
             {selectedOrder.notes && <p className="text-gray-500 italic">{selectedOrder.notes}</p>}
-            <div className="flex gap-2 pt-2 border-t border-gray-100">
+            <div className="flex gap-2 pt-2 border-t border-gray-100 flex-wrap">
+              {selectedOrder.status !== 'delivered' && selectedOrder.status !== 'cancelled' && (
+                <Button variant="secondary" size="sm" onClick={() => { openSeña(selectedOrder.id!); setShowDetail(null) }}>
+                  + Registrar seña
+                </Button>
+              )}
               {selectedOrder.status === 'pending' && (
                 <Button variant="secondary" size="sm" icon={<Edit2 size={14} />} onClick={() => { openEditOrder(selectedOrder); setShowDetail(null) }}>
                   Editar
@@ -721,6 +878,59 @@ export function Logistica() {
           </div>
         </Modal>
       )}
+
+      {/* Modal seña */}
+      <Modal isOpen={showSeña} onClose={() => { setShowSeña(false); setSeñaOrderId(null) }} title="Registrar seña">
+        {señaOrderId && (() => {
+          const ord = orders.find(o => o.id === señaOrderId)
+          if (!ord) return null
+          const señaTotal = (ord.advancePayments ?? []).reduce((s, p) => s + p.amount, 0)
+          const saldo = Math.max(0, ord.totalAmount - señaTotal)
+          return (
+            <div className="space-y-4">
+              <div className="bg-violet-50 rounded-xl p-3 text-sm space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Pedido de {ord.customerName}</span>
+                  <span className="font-bold text-violet-700">{fmtPYG(ord.totalAmount)}</span>
+                </div>
+                {señaTotal > 0 && (
+                  <div className="flex justify-between text-xs text-gray-400">
+                    <span>Señas anteriores</span>
+                    <span>{fmtPYG(señaTotal)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between font-semibold text-violet-700 border-t border-violet-100 pt-1">
+                  <span>Saldo restante</span>
+                  <span>{fmtPYG(saldo)}</span>
+                </div>
+              </div>
+              <Input label="Monto de la seña (Gs.)" type="number" value={señaForm.amount} onChange={e => setSeñaForm(f => ({ ...f, amount: e.target.value }))} placeholder={`Máx. ${fmtPYG(saldo)}`} />
+              <div className="grid grid-cols-2 gap-3">
+                <Select
+                  label="Método de pago"
+                  value={señaForm.method}
+                  onChange={e => setSeñaForm(f => ({ ...f, method: e.target.value as PaymentMethod }))}
+                  options={[{ value: 'cash', label: 'Efectivo' }, { value: 'transfer', label: 'Transferencia' }, { value: 'card', label: 'Tarjeta' }, { value: 'other', label: 'Otro' }]}
+                />
+                <Select
+                  label="Acreditar en"
+                  value={señaForm.accountId}
+                  onChange={e => setSeñaForm(f => ({ ...f, accountId: e.target.value }))}
+                  options={[{ value: '', label: 'Seleccionar...' }, ...accounts.map(a => ({ value: String(a.id), label: `${a.name} — ${fmtPYG(a.balance)}` }))]}
+                />
+              </div>
+              <Input label="Fecha" type="date" value={señaForm.date} onChange={e => setSeñaForm(f => ({ ...f, date: e.target.value }))} />
+              <Input label="Notas (opcional)" value={señaForm.notes} onChange={e => setSeñaForm(f => ({ ...f, notes: e.target.value }))} />
+              <div className="flex gap-2 pt-2">
+                <Button variant="secondary" className="flex-1" onClick={() => { setShowSeña(false); setSeñaOrderId(null) }}>Cancelar</Button>
+                <Button className="flex-1" onClick={handleAddSeña} disabled={!señaForm.amount || !señaForm.accountId || parseFloat(señaForm.amount) <= 0}>
+                  Registrar seña
+                </Button>
+              </div>
+            </div>
+          )
+        })()}
+      </Modal>
     </div>
   )
 }

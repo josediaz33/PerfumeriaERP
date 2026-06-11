@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { Plus, Droplets, FlaskConical, Package, Edit2, Trash2 } from 'lucide-react'
+import { Plus, Droplets, FlaskConical, Package, Edit2, Trash2, AlertTriangle } from 'lucide-react'
 import { db } from '../db/db'
-import type { DecantBatch } from '../db/types'
+import type { DecantBatch, Supply, SupplyType } from '../db/types'
 import { fmtPYG, fmtDate, today, nowISO } from '../lib/format'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
@@ -12,6 +12,17 @@ import { Input, Select, Textarea } from '../components/ui/Input'
 import { Badge } from '../components/ui/Badge'
 
 const DECANT_SIZES = [3, 5, 10, 30]
+
+// sizeML implícito según el tipo de insumo
+const TYPE_TO_ML: Partial<Record<SupplyType, number>> = {
+  '3ml': 3, '5ml': 5, '10ml': 10, '30ml': 30,
+}
+
+// Busca el insumo para un tamaño: primero por sizeML, luego por tipo
+function findSupplyForSize(supplies: Supply[], sizeML: number): Supply | undefined {
+  return supplies.find(s => s.sizeML === sizeML)
+    ?? supplies.find(s => s.type === `${sizeML}ml` as SupplyType)
+}
 
 export function Decants() {
   const allProducts = useLiveQuery(() => db.products.filter(p => p.type === 'decant_source').toArray()) ?? []
@@ -27,9 +38,17 @@ export function Decants() {
   const [batchNotes, setBatchNotes] = useState('')
   const [batchDate, setBatchDate] = useState(today())
 
-  const [supplyForm, setSupplyForm] = useState({ name: '', type: '5ml', sizeML: '5', costPYG: '', stock: '0', minStock: '10' })
+  const [supplyForm, setSupplyForm] = useState({
+    name: '', type: '5ml' as SupplyType, sizeML: '5', costPYG: '', stock: '0', minStock: '10',
+  })
 
-  // Edit production
+  // Edición de insumo existente
+  const [editSupply, setEditSupply] = useState<Supply | null>(null)
+  const [editSupplyForm, setEditSupplyForm] = useState({
+    name: '', type: '5ml' as SupplyType, sizeML: '', costPYG: '', stock: '', minStock: '',
+  })
+
+  // Edición de producción
   const [editBatch, setEditBatch] = useState<DecantBatch | null>(null)
   const [editQty, setEditQty] = useState('')
   const [editPrice, setEditPrice] = useState('')
@@ -37,10 +56,10 @@ export function Decants() {
   const [editNotes, setEditNotes] = useState('')
 
   const product = allProducts.find(p => p.id === selectedProduct)
-  const costPerML = product ? product.costPYG / product.sizeML : 0
-  const supplyForSize = supplies.find(s => s.sizeML === selectedSize)
+  const cpm = product ? product.costPYG : 0  // Gs/ml
+  const supplyForSize = findSupplyForSize(supplies, selectedSize)
   const supplyCost = supplyForSize?.costPYG ?? 0
-  const decantCost = costPerML * selectedSize + supplyCost
+  const decantCost = cpm * selectedSize + supplyCost
   const maxDecants = product ? Math.floor(product.stockOpenML / selectedSize) : 0
   const quantityNum = parseInt(qty) || 0
   const totalMLNeeded = quantityNum * selectedSize
@@ -49,12 +68,9 @@ export function Decants() {
   async function handleProduce() {
     if (!product || !quantityNum || !supplyForSize) return
     if (product.stockOpenML < totalMLNeeded) return
-
     const now = nowISO()
     await db.transaction('rw', db.products, db.decantBatches, db.supplies, async () => {
-      await db.products.where('id').equals(product.id!).modify(p => {
-        p.stockOpenML -= totalMLNeeded
-      })
+      await db.products.where('id').equals(product.id!).modify(p => { p.stockOpenML -= totalMLNeeded })
       await db.supplies.where('id').equals(supplyForSize.id!).modify(s => {
         s.stock = Math.max(0, s.stock - quantityNum)
       })
@@ -84,31 +100,21 @@ export function Decants() {
     if (!editBatch) return
     const prod = allProducts.find(p => p.id === editBatch.productId)
     if (!prod) return
-
     const newQty = parseInt(editQty) || 0
     const qtyDelta = newQty - editBatch.quantity
     const newMLUsed = newQty * editBatch.sizeML
     const mlDelta = newMLUsed - editBatch.mlUsed
-
-    if (mlDelta > 0 && prod.stockOpenML < mlDelta) return // not enough ml
-
-    const supplyForSize = supplies.find(s => s.sizeML === editBatch.sizeML)
-
+    if (mlDelta > 0 && prod.stockOpenML < mlDelta) return
+    const supplyForSize = findSupplyForSize(supplies, editBatch.sizeML)
     await db.transaction('rw', db.products, db.decantBatches, db.supplies, async () => {
-      await db.products.where('id').equals(prod.id!).modify(p => {
-        p.stockOpenML = Math.max(0, p.stockOpenML - mlDelta)
-      })
+      await db.products.where('id').equals(prod.id!).modify(p => { p.stockOpenML = Math.max(0, p.stockOpenML - mlDelta) })
       if (supplyForSize && qtyDelta !== 0) {
-        await db.supplies.where('id').equals(supplyForSize.id!).modify(s => {
-          s.stock = Math.max(0, s.stock - qtyDelta)
-        })
+        await db.supplies.where('id').equals(supplyForSize.id!).modify(s => { s.stock = Math.max(0, s.stock - qtyDelta) })
       }
       await db.decantBatches.update(editBatch.id!, {
-        quantity: newQty,
-        mlUsed: newMLUsed,
+        quantity: newQty, mlUsed: newMLUsed,
         sellingPricePYG: parseFloat(editPrice) || 0,
-        date: editDate,
-        notes: editNotes || undefined,
+        date: editDate, notes: editNotes || undefined,
       })
     })
     setEditBatch(null)
@@ -127,17 +133,11 @@ export function Decants() {
     })
   }
 
-  async function handleDeleteSupply(id: number, name: string) {
-    if (!confirm(`¿Eliminar "${name}"?`)) return
-    await db.supplies.delete(id)
-  }
-
   async function handleAddSupply() {
     if (!supplyForm.name || !supplyForm.costPYG) return
     const now = nowISO()
     await db.supplies.add({
-      name: supplyForm.name,
-      type: supplyForm.type as any,
+      name: supplyForm.name, type: supplyForm.type,
       sizeML: parseFloat(supplyForm.sizeML) || undefined,
       costPYG: parseFloat(supplyForm.costPYG),
       stock: parseInt(supplyForm.stock) || 0,
@@ -145,7 +145,34 @@ export function Decants() {
       createdAt: now, updatedAt: now,
     })
     setSupplyForm({ name: '', type: '5ml', sizeML: '5', costPYG: '', stock: '0', minStock: '10' })
-    setShowSupply(false)
+  }
+
+  function openEditSupply(s: Supply) {
+    setEditSupply(s)
+    setEditSupplyForm({
+      name: s.name, type: s.type as SupplyType,
+      sizeML: s.sizeML != null ? String(s.sizeML) : '',
+      costPYG: String(s.costPYG), stock: String(s.stock), minStock: String(s.minStock),
+    })
+  }
+
+  async function handleSaveSupply() {
+    if (!editSupply?.id) return
+    await db.supplies.update(editSupply.id, {
+      name: editSupplyForm.name,
+      type: editSupplyForm.type,
+      sizeML: parseFloat(editSupplyForm.sizeML) || undefined,
+      costPYG: parseFloat(editSupplyForm.costPYG) || editSupply.costPYG,
+      stock: parseInt(editSupplyForm.stock) || 0,
+      minStock: parseInt(editSupplyForm.minStock) || 10,
+      updatedAt: nowISO(),
+    })
+    setEditSupply(null)
+  }
+
+  async function handleDeleteSupply(id: number, name: string) {
+    if (!confirm(`¿Eliminar "${name}"?`)) return
+    await db.supplies.delete(id)
   }
 
   return (
@@ -164,7 +191,7 @@ export function Decants() {
       {/* Calculadora por producto */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
         {allProducts.map(p => {
-          const cpm = p.costPYG / p.sizeML
+          const cpm = p.costPYG
           return (
             <Card key={p.id}>
               <CardHeader>
@@ -173,21 +200,24 @@ export function Decants() {
                     <p className="font-semibold text-gray-900">{p.name}</p>
                     <p className="text-sm text-gray-500">{p.brand} · {p.sizeML}ml · {p.stockOpenML}ml disponibles</p>
                   </div>
-                  <Badge color="violet">{fmtPYG(p.costPYG)}</Badge>
+                  <Badge color="violet">{fmtPYG(p.costPYG)}/ml</Badge>
                 </div>
               </CardHeader>
               <CardBody>
-                <p className="text-xs text-gray-500 mb-3">Costo por ml: <span className="font-semibold text-gray-900">{fmtPYG(Math.round(cpm))}</span></p>
                 <div className="grid grid-cols-4 gap-2">
                   {DECANT_SIZES.map(size => {
-                    const sup = supplies.find(s => s.sizeML === size)
+                    const sup = findSupplyForSize(supplies, size)
                     const cost = cpm * size + (sup?.costPYG ?? 0)
                     const canMake = Math.floor(p.stockOpenML / size)
                     return (
-                      <div key={size} className="bg-gray-50 rounded-lg p-2.5 text-center">
+                      <div key={size} className={`rounded-lg p-2.5 text-center ${sup ? 'bg-gray-50' : 'bg-orange-50 border border-orange-100'}`}>
                         <p className="text-xs font-medium text-violet-600">{size}ml</p>
                         <p className="text-sm font-bold text-gray-900 mt-1">{fmtPYG(Math.round(cost))}</p>
-                        <p className="text-xs text-gray-400">frasco: {fmtPYG(sup?.costPYG ?? 0)}</p>
+                        {sup ? (
+                          <p className="text-xs text-gray-400 truncate" title={sup.name}>{sup.name}</p>
+                        ) : (
+                          <p className="text-xs text-orange-500">Sin frasco</p>
+                        )}
                         <p className="text-xs text-green-600 mt-1">{canMake} posibles</p>
                       </div>
                     )
@@ -212,17 +242,41 @@ export function Decants() {
       <div className="mb-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-3">Insumos (frascos)</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {supplies.map(s => (
-            <Card key={s.id}>
-              <CardBody className="text-center">
-                <p className="font-medium text-gray-900">{s.name}</p>
-                <p className="text-lg font-bold text-violet-600 mt-1">{fmtPYG(s.costPYG)}</p>
-                <p className={`text-sm mt-1 ${s.stock <= s.minStock ? 'text-orange-600' : 'text-gray-500'}`}>
-                  Stock: {s.stock} u.
-                </p>
-              </CardBody>
-            </Card>
-          ))}
+          {supplies.map(s => {
+            const linked = s.sizeML != null
+              ? s.sizeML
+              : TYPE_TO_ML[s.type as SupplyType]
+            return (
+              <Card key={s.id}>
+                <CardBody className="text-center">
+                  <p className="font-medium text-gray-900 text-sm">{s.name}</p>
+                  {linked && (
+                    <p className="text-xs text-violet-500 mt-0.5">{linked}ml</p>
+                  )}
+                  <p className="text-lg font-bold text-violet-600 mt-1">{fmtPYG(s.costPYG)}</p>
+                  <p className={`text-sm mt-1 ${s.stock <= s.minStock ? 'text-orange-600' : 'text-gray-500'}`}>
+                    Stock: {s.stock} u.
+                  </p>
+                  {!linked && (
+                    <p className="text-xs text-orange-500 mt-1 flex items-center justify-center gap-1">
+                      <AlertTriangle size={10} /> Sin ML asignado
+                    </p>
+                  )}
+                  <button
+                    onClick={() => openEditSupply(s)}
+                    className="mt-2 text-xs text-gray-400 hover:text-violet-600 flex items-center gap-1 mx-auto"
+                  >
+                    <Edit2 size={10} /> Editar
+                  </button>
+                </CardBody>
+              </Card>
+            )
+          })}
+          {supplies.length === 0 && (
+            <div className="col-span-4 text-center py-8 text-gray-400 text-sm">
+              No hay insumos registrados. Agregá frascos para empezar a producir decants.
+            </div>
+          )}
         </div>
       </div>
 
@@ -273,24 +327,13 @@ export function Decants() {
                       <td className="px-5 py-3 text-right text-gray-600">{b.mlUsed}ml</td>
                       <td className="px-3 py-3">
                         <div className="flex items-center gap-1">
-                          {b.sourceType === 'sale' && (
-                            <span className="text-xs text-blue-400 mr-1" title={`Venta #${b.sourceId}`}>V#{b.sourceId}</span>
-                          )}
                           {b.sourceType === 'local_order' && (
                             <span className="text-xs text-orange-400 mr-1" title="Pedido local">P</span>
                           )}
-                          <button
-                            onClick={() => openEditBatch(b)}
-                            className="p-1.5 rounded-lg text-gray-300 hover:bg-violet-50 hover:text-violet-500 transition-all cursor-pointer"
-                            title="Editar producción"
-                          >
+                          <button onClick={() => openEditBatch(b)} className="p-1.5 rounded-lg text-gray-300 hover:bg-violet-50 hover:text-violet-500 transition-all cursor-pointer" title="Editar producción">
                             <Edit2 size={13} />
                           </button>
-                          <button
-                            onClick={() => handleDeleteBatch(b)}
-                            className="p-1.5 rounded-lg text-gray-300 hover:bg-red-50 hover:text-red-500 transition-all cursor-pointer"
-                            title="Eliminar producción"
-                          >
+                          <button onClick={() => handleDeleteBatch(b)} className="p-1.5 rounded-lg text-gray-300 hover:bg-red-50 hover:text-red-500 transition-all cursor-pointer" title="Eliminar producción">
                             <Trash2 size={13} />
                           </button>
                         </div>
@@ -324,30 +367,54 @@ export function Decants() {
           <div>
             <label className="text-sm font-medium text-gray-700 block mb-1">Tamaño del decant</label>
             <div className="grid grid-cols-4 gap-2">
-              {DECANT_SIZES.map(s => (
-                <button
-                  key={s}
-                  onClick={() => {
-                    setSelectedSize(s)
-                    if (product) {
-                      const autoP = s === 3 ? product.price3ML : s === 5 ? product.price5ML : s === 10 ? product.price10ML : product.price30ML
-                      if (autoP) setSellingPrice(String(autoP))
-                    }
-                  }}
-                  className={`py-2.5 rounded-lg text-sm font-medium cursor-pointer transition-colors ${selectedSize === s ? 'bg-violet-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                >
-                  {s}ml
-                </button>
-              ))}
+              {DECANT_SIZES.map(s => {
+                const sup = findSupplyForSize(supplies, s)
+                return (
+                  <button
+                    key={s}
+                    onClick={() => {
+                      setSelectedSize(s)
+                      if (product) {
+                        const autoP = s === 3 ? product.price3ML : s === 5 ? product.price5ML : s === 10 ? product.price10ML : product.price30ML
+                        if (autoP) setSellingPrice(String(autoP))
+                      }
+                    }}
+                    className={`py-2.5 rounded-lg text-sm font-medium cursor-pointer transition-colors ${selectedSize === s ? 'bg-violet-600 text-white' : sup ? 'bg-gray-100 text-gray-600 hover:bg-gray-200' : 'bg-orange-50 text-orange-600 border border-orange-200'}`}
+                    title={sup ? `Frasco: ${sup.name}` : 'Sin frasco registrado para este tamaño'}
+                  >
+                    {s}ml
+                    {!sup && <span className="block text-xs mt-0.5">sin frasco</span>}
+                  </button>
+                )
+              })}
             </div>
           </div>
+
+          {/* Frasco que se usará */}
+          {supplyForSize ? (
+            <div className="flex items-center justify-between bg-violet-50 rounded-lg px-3 py-2 text-sm">
+              <span className="text-gray-500">Frasco a usar:</span>
+              <div className="flex items-center gap-3">
+                <span className="font-medium text-gray-800">{supplyForSize.name}</span>
+                <span className={`text-xs ${supplyForSize.stock < quantityNum ? 'text-red-500 font-semibold' : 'text-gray-400'}`}>
+                  Stock: {supplyForSize.stock} u.
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 text-sm text-orange-700">
+              <AlertTriangle size={14} className="shrink-0" />
+              No hay frasco registrado para {selectedSize}ml. Agregá uno en "Gestionar insumos".
+            </div>
+          )}
+
           <Input label="Cantidad a producir" type="number" value={qty} onChange={e => setQty(e.target.value)} />
 
           {product && (
             <div className="bg-violet-50 rounded-xl p-4 space-y-1.5 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-500">Costo por ml</span>
-                <span className="font-semibold">{fmtPYG(Math.round(costPerML))}</span>
+                <span className="font-semibold">{fmtPYG(Math.round(cpm))}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Costo del frasco ({selectedSize}ml)</span>
@@ -377,68 +444,160 @@ export function Decants() {
           <Textarea label="Notas" value={batchNotes} onChange={e => setBatchNotes(e.target.value)} rows={2} />
           <div className="flex gap-2 pt-2">
             <Button variant="secondary" className="flex-1" onClick={() => setShowProduce(false)}>Cancelar</Button>
-            <Button className="flex-1" onClick={handleProduce} disabled={!product || !quantityNum || totalMLNeeded > (product?.stockOpenML ?? 0)}>
+            <Button
+              className="flex-1"
+              onClick={handleProduce}
+              disabled={!product || !quantityNum || !supplyForSize || totalMLNeeded > (product?.stockOpenML ?? 0) || (supplyForSize?.stock ?? 0) < quantityNum}
+            >
               Producir
             </Button>
           </div>
         </div>
       </Modal>
 
-      {/* Modal insumos */}
-      <Modal isOpen={showSupply} onClose={() => setShowSupply(false)} title="Gestionar insumos">
+      {/* Modal gestionar insumos */}
+      <Modal isOpen={showSupply} onClose={() => setShowSupply(false)} title="Gestionar insumos" size="lg">
         <div className="space-y-4">
-          <h3 className="font-medium text-gray-900">Agregar insumo</h3>
-          <Input label="Nombre" value={supplyForm.name} onChange={e => setSupplyForm(f => ({ ...f, name: e.target.value }))} placeholder="Ej: Frasco 5ml con tapa" />
-          <Select
-            label="Tipo"
-            value={supplyForm.type}
-            onChange={e => setSupplyForm(f => ({ ...f, type: e.target.value }))}
-            options={[
-              { value: '3ml', label: 'Frasco 3ml' }, { value: '5ml', label: 'Frasco 5ml' },
-              { value: '10ml', label: 'Frasco 10ml' }, { value: '30ml', label: 'Frasco 30ml' },
-              { value: 'cap', label: 'Tapa' }, { value: 'label', label: 'Etiqueta' },
-              { value: 'packaging', label: 'Packaging' }, { value: 'gift_wrap', label: 'Papel de regalo' },
-              { value: 'other', label: 'Otro' },
-            ]}
-          />
-          <Input label="Tamaño (ml, si aplica)" type="number" value={supplyForm.sizeML} onChange={e => setSupplyForm(f => ({ ...f, sizeML: e.target.value }))} />
-          <Input label="Costo unitario (Gs.)" type="number" value={supplyForm.costPYG} onChange={e => setSupplyForm(f => ({ ...f, costPYG: e.target.value }))} />
-          <Input label="Stock actual" type="number" value={supplyForm.stock} onChange={e => setSupplyForm(f => ({ ...f, stock: e.target.value }))} />
-          <Button className="w-full" onClick={handleAddSupply}>Agregar insumo</Button>
+          <div>
+            <h3 className="font-medium text-gray-900 mb-3">Agregar insumo</h3>
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  label="Nombre"
+                  value={supplyForm.name}
+                  onChange={e => setSupplyForm(f => ({ ...f, name: e.target.value }))}
+                  placeholder="Ej: Frasco 5ml premium"
+                />
+                <Select
+                  label="Tipo"
+                  value={supplyForm.type}
+                  onChange={e => {
+                    const newType = e.target.value as SupplyType
+                    const autoML = TYPE_TO_ML[newType]
+                    setSupplyForm(f => ({ ...f, type: newType, sizeML: autoML ? String(autoML) : f.sizeML }))
+                  }}
+                  options={[
+                    { value: '3ml', label: 'Frasco 3ml' }, { value: '5ml', label: 'Frasco 5ml' },
+                    { value: '10ml', label: 'Frasco 10ml' }, { value: '30ml', label: 'Frasco 30ml' },
+                    { value: 'cap', label: 'Tapa' }, { value: 'label', label: 'Etiqueta' },
+                    { value: 'packaging', label: 'Packaging' }, { value: 'gift_wrap', label: 'Papel de regalo' },
+                    { value: 'other', label: 'Otro' },
+                  ]}
+                />
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <Input
+                    label="Tamaño (ml)"
+                    type="number"
+                    value={supplyForm.sizeML}
+                    onChange={e => setSupplyForm(f => ({ ...f, sizeML: e.target.value }))}
+                    placeholder="Ej: 5"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Crucial para asociar al decant correcto</p>
+                </div>
+                <Input label="Costo unitario (Gs.)" type="number" value={supplyForm.costPYG} onChange={e => setSupplyForm(f => ({ ...f, costPYG: e.target.value }))} />
+                <Input label="Stock actual" type="number" value={supplyForm.stock} onChange={e => setSupplyForm(f => ({ ...f, stock: e.target.value }))} />
+              </div>
+              <Button className="w-full" onClick={handleAddSupply} disabled={!supplyForm.name || !supplyForm.costPYG}>
+                Agregar insumo
+              </Button>
+            </div>
+          </div>
 
           {supplies.length > 0 && (
             <div className="border-t border-gray-100 pt-4">
-              <p className="text-sm font-medium text-gray-700 mb-2">Insumos actuales</p>
+              <p className="text-sm font-medium text-gray-700 mb-3">Insumos registrados</p>
               <div className="space-y-2">
-                {supplies.map(s => (
-                  <div key={s.id} className="flex items-center justify-between text-sm bg-gray-50 rounded-lg px-3 py-2">
-                    <span className="text-gray-900">{s.name}</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-violet-600 font-medium">{fmtPYG(s.costPYG)}</span>
-                      <span className="text-gray-400">Stock:</span>
-                      <input
-                        type="number"
-                        className="w-16 text-sm border border-gray-200 rounded px-2 py-0.5 text-center"
-                        defaultValue={s.stock}
-                        onBlur={async e => {
-                          const val = parseInt(e.target.value)
-                          if (!isNaN(val) && s.id) await db.supplies.update(s.id, { stock: val, updatedAt: nowISO() })
-                        }}
-                      />
-                      <button
-                        onClick={() => handleDeleteSupply(s.id!, s.name)}
-                        className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 cursor-pointer transition-colors"
-                        title="Eliminar insumo"
-                      >
-                        <Trash2 size={13} />
-                      </button>
+                {supplies.map(s => {
+                  const linkedML = s.sizeML ?? TYPE_TO_ML[s.type as SupplyType]
+                  return (
+                    <div key={s.id} className="flex items-center gap-2 text-sm bg-gray-50 rounded-lg px-3 py-2.5">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-gray-900 truncate">{s.name}</p>
+                        <p className="text-xs text-gray-400">
+                          {linkedML ? <span className="text-violet-600">{linkedML}ml · </span> : <span className="text-orange-500">Sin ML · </span>}
+                          {fmtPYG(s.costPYG)} c/u
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-xs text-gray-400">Stock:</span>
+                        <input
+                          type="number"
+                          className="w-16 text-sm border border-gray-200 rounded px-2 py-0.5 text-center"
+                          defaultValue={s.stock}
+                          onBlur={async e => {
+                            const val = parseInt(e.target.value)
+                            if (!isNaN(val) && s.id) await db.supplies.update(s.id, { stock: val, updatedAt: nowISO() })
+                          }}
+                        />
+                        <button
+                          onClick={() => openEditSupply(s)}
+                          className="p-1.5 rounded text-gray-400 hover:text-violet-600 hover:bg-violet-50 transition-colors"
+                          title="Editar insumo"
+                        >
+                          <Edit2 size={13} />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteSupply(s.id!, s.name)}
+                          className="p-1.5 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 cursor-pointer transition-colors"
+                          title="Eliminar insumo"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )}
         </div>
+      </Modal>
+
+      {/* Modal editar insumo */}
+      <Modal isOpen={!!editSupply} onClose={() => setEditSupply(null)} title="Editar insumo">
+        {editSupply && (
+          <div className="space-y-4">
+            <Input label="Nombre" value={editSupplyForm.name} onChange={e => setEditSupplyForm(f => ({ ...f, name: e.target.value }))} />
+            <Select
+              label="Tipo"
+              value={editSupplyForm.type}
+              onChange={e => {
+                const newType = e.target.value as SupplyType
+                const autoML = TYPE_TO_ML[newType]
+                setEditSupplyForm(f => ({ ...f, type: newType, sizeML: autoML ? String(autoML) : f.sizeML }))
+              }}
+              options={[
+                { value: '3ml', label: 'Frasco 3ml' }, { value: '5ml', label: 'Frasco 5ml' },
+                { value: '10ml', label: 'Frasco 10ml' }, { value: '30ml', label: 'Frasco 30ml' },
+                { value: 'cap', label: 'Tapa' }, { value: 'label', label: 'Etiqueta' },
+                { value: 'packaging', label: 'Packaging' }, { value: 'gift_wrap', label: 'Papel de regalo' },
+                { value: 'other', label: 'Otro' },
+              ]}
+            />
+            <div>
+              <Input
+                label="Tamaño en ML (para asociar al decant correcto)"
+                type="number"
+                value={editSupplyForm.sizeML}
+                onChange={e => setEditSupplyForm(f => ({ ...f, sizeML: e.target.value }))}
+                placeholder="Ej: 10"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Este valor determina en qué tamaño de decant se usa este frasco. Si dice "Sin frasco" en la calculadora, revisá este campo.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Costo unitario (Gs.)" type="number" value={editSupplyForm.costPYG} onChange={e => setEditSupplyForm(f => ({ ...f, costPYG: e.target.value }))} />
+              <Input label="Stock actual" type="number" value={editSupplyForm.stock} onChange={e => setEditSupplyForm(f => ({ ...f, stock: e.target.value }))} />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="secondary" className="flex-1" onClick={() => setEditSupply(null)}>Cancelar</Button>
+              <Button className="flex-1" onClick={handleSaveSupply}>Guardar</Button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* Modal editar producción */}
@@ -484,9 +643,7 @@ export function Decants() {
               <Input label="Notas" value={editNotes} onChange={e => setEditNotes(e.target.value)} />
               <div className="flex gap-2 pt-2">
                 <Button variant="secondary" className="flex-1" onClick={() => setEditBatch(null)}>Cancelar</Button>
-                <Button className="flex-1" onClick={handleEditBatch} disabled={!newQtyNum || !hasEnoughML}>
-                  Guardar cambios
-                </Button>
+                <Button className="flex-1" onClick={handleEditBatch} disabled={!newQtyNum || !hasEnoughML}>Guardar cambios</Button>
               </div>
             </div>
           )
