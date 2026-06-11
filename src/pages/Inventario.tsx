@@ -126,15 +126,47 @@ export function Inventario() {
       price30ML: parseFloat(form.price30ML) || undefined,
     } : {}
     if (editId) {
-      await db.products.update(editId, {
-        name: form.name, brand: form.brand, olfactiveFamily: form.olfactiveFamily,
-        concentration: form.concentration, sizeML: parseFloat(form.sizeML),
-        type: form.type, sellingPricePYG: parseFloat(form.sellingPricePYG) || 0,
-        minStock: parseInt(form.minStock) || 1, notes: form.notes,
-        costPYG: parseFloat(form.costPYG) || 0,
-        stockSealed: parseInt(form.stockSealed) || 0,
-        stockOpenML: parseFloat(form.stockOpenML) || 0,
-        updatedAt: now, ...decantPrices,
+      const oldProduct = products.find(p => p.id === editId)
+      const newStockSealed = parseInt(form.stockSealed) || 0
+      const newStockOpenML = parseFloat(form.stockOpenML) || 0
+
+      await db.transaction('rw', db.products, db.stockEntries, async () => {
+        await db.products.update(editId, {
+          name: form.name, brand: form.brand, olfactiveFamily: form.olfactiveFamily,
+          concentration: form.concentration, sizeML: parseFloat(form.sizeML),
+          type: form.type, sellingPricePYG: parseFloat(form.sellingPricePYG) || 0,
+          minStock: parseInt(form.minStock) || 1, notes: form.notes,
+          costPYG: parseFloat(form.costPYG) || 0,
+          stockSealed: newStockSealed,
+          stockOpenML: newStockOpenML,
+          updatedAt: now, ...decantPrices,
+        })
+
+        // Sync quantityRemaining on lots using FIFO when stock was manually corrected
+        if (oldProduct) {
+          if (newStockSealed !== oldProduct.stockSealed) {
+            const entries = (await db.stockEntries.where('productId').equals(editId).toArray())
+              .filter(e => e.type === 'sealed')
+              .sort((a, b) => b.date.localeCompare(a.date)) // newest first (FIFO: oldest consumed first)
+            let left = newStockSealed
+            for (const e of entries) {
+              const rem = Math.max(0, Math.min(e.quantity, left))
+              await db.stockEntries.update(e.id!, { quantityRemaining: rem })
+              left = Math.max(0, left - rem)
+            }
+          }
+          if (newStockOpenML !== oldProduct.stockOpenML) {
+            const entries = (await db.stockEntries.where('productId').equals(editId).toArray())
+              .filter(e => e.type === 'decant_source')
+              .sort((a, b) => b.date.localeCompare(a.date)) // newest first
+            let left = newStockOpenML
+            for (const e of entries) {
+              const rem = Math.max(0, Math.min(e.quantity, left))
+              await db.stockEntries.update(e.id!, { quantityRemaining: rem })
+              left = Math.max(0, left - rem)
+            }
+          }
+        }
       })
     } else {
       await db.products.add({
@@ -800,7 +832,7 @@ export function Inventario() {
           {editId && (
             <div className="col-span-2 border-t border-gray-100 pt-4">
               <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Corrección directa de datos</p>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Input label="Costo CPP (Gs.)" type="number" value={form.costPYG} onChange={e => setForm(f => ({ ...f, costPYG: e.target.value }))} />
                   {editSellPrice > 0 && editCostPYG > 0 && (
@@ -809,8 +841,24 @@ export function Inventario() {
                     </p>
                   )}
                 </div>
-                <Input label="Stock sellado (u.)" type="number" value={form.stockSealed} onChange={e => setForm(f => ({ ...f, stockSealed: e.target.value }))} />
-                <Input label="Stock abierto (ml)" type="number" value={form.stockOpenML} onChange={e => setForm(f => ({ ...f, stockOpenML: e.target.value }))} />
+                {form.type === 'sealed' ? (
+                  <Input
+                    label="Stock sellado (u.)"
+                    type="number"
+                    value={form.stockSealed}
+                    onChange={e => setForm(f => ({ ...f, stockSealed: e.target.value }))}
+                  />
+                ) : (
+                  <div>
+                    <Input
+                      label="Stock abierto (ml)"
+                      type="number"
+                      value={form.stockOpenML}
+                      onChange={e => setForm(f => ({ ...f, stockOpenML: e.target.value }))}
+                    />
+                    <p className="text-xs text-blue-500 mt-1">Ajusta los ML disponibles en los lotes automáticamente</p>
+                  </div>
+                )}
               </div>
               <p className="text-xs text-gray-400 mt-2">Usá estos campos solo para corregir errores. Para nuevos lotes, usá "Ingresar Stock" desde la tabla.</p>
             </div>

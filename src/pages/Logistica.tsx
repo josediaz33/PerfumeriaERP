@@ -47,7 +47,7 @@ export function Logistica() {
     customerName: '', customerPhone: '', customerAddress: '',
     shippingCost: '0', shippingPaidBy: 'customer' as 'customer' | 'business',
     orderDate: today(), estimatedDelivery: '', notes: '',
-    items: [{ productId: '0', type: 'sealed' as 'sealed' | 'decant', sizeML: '5', quantity: '1', unitPrice: '' }],
+    items: [{ productId: '0', type: 'sealed' as 'sealed' | 'decant' | 'partial', sizeML: '5', quantity: '1', unitPrice: '' }],
     supplies: [] as { supplyId: string; quantity: string }[],
   }
 
@@ -104,6 +104,11 @@ export function Logistica() {
         } else if (supply.stock < item.quantity) {
           errors.push(`Frascos ${item.sizeML}ml: stock insuficiente (${supply.stock} disponibles, se necesitan ${item.quantity})`)
         }
+      } else if (item.type === 'partial' && item.sizeML) {
+        const mlNeeded = item.quantity * item.sizeML
+        if (product.stockOpenML < mlNeeded) {
+          errors.push(`${product.brand} — ${product.name}: ML insuficientes para venta parcial (${product.stockOpenML}ml disponibles, se necesitan ${mlNeeded}ml)`)
+        }
       }
     }
     return errors
@@ -148,7 +153,7 @@ export function Logistica() {
       customerName: form.customerName, customerPhone: form.customerPhone, customerAddress: form.customerAddress,
       items: validItems.map(i => ({
         productId: parseInt(i.productId), type: i.type,
-        sizeML: i.type === 'decant' ? parseInt(i.sizeML) : undefined,
+        sizeML: (i.type === 'decant' || i.type === 'partial') ? parseInt(i.sizeML) : undefined,
         quantity: parseInt(i.quantity), unitPrice: parseFloat(i.unitPrice),
       })),
       supplies: supplyItems.map(si => {
@@ -204,6 +209,20 @@ export function Logistica() {
             }
             const supply = await db.supplies.where('sizeML').equals(item.sizeML).first()
             if (supply?.id) await db.supplies.update(supply.id, { stock: supply.stock + item.quantity, updatedAt: now })
+          } else if (item.type === 'partial' && item.sizeML) {
+            const mlToRestore = item.quantity * item.sizeML
+            await db.products.update(item.productId, { stockOpenML: product.stockOpenML + mlToRestore })
+            const lots = (await db.stockEntries.where('productId').equals(item.productId).toArray())
+              .filter(l => l.quantityRemaining !== undefined).sort((a, b) => b.date.localeCompare(a.date))
+            let left = mlToRestore
+            for (const lot of lots) {
+              if (left <= 0) break
+              const deducted = lot.quantity - lot.quantityRemaining!
+              if (deducted <= 0) continue
+              const restore = Math.min(deducted, left)
+              await db.stockEntries.update(lot.id!, { quantityRemaining: lot.quantityRemaining! + restore })
+              left -= restore
+            }
           } else if (item.type === 'sealed') {
             await db.products.update(item.productId, { stockSealed: product.stockSealed + item.quantity })
             const lots = (await db.stockEntries.where('productId').equals(item.productId).toArray())
@@ -284,7 +303,7 @@ export function Logistica() {
             }
             const supply = await db.supplies.where('sizeML').equals(sizeML).first()
             if (supply?.id) await db.supplies.update(supply.id, { stock: Math.max(0, supply.stock - item.quantity), updatedAt: now })
-            const cpm = product.costPYG / product.sizeML
+            const cpm = product.costPYG  // Gs/ml (stored per ML for decant_source)
             await db.decantBatches.add({
               productId: item.productId, sizeML, quantity: item.quantity,
               supplyId: supply?.id ?? 0,
@@ -293,6 +312,33 @@ export function Logistica() {
               mlUsed: mlToDeduct, stockRemaining: 0,
               date: order.orderDate,
               notes: `Pedido — ${order.customerName}`,
+              sourceType: 'local_order', sourceId: id,
+              createdAt: now,
+            })
+          } else if (item.type === 'partial' && item.sizeML) {
+            const sizeML = item.sizeML
+            const mlToDeduct = item.quantity * sizeML
+            await db.products.update(item.productId, { stockOpenML: Math.max(0, product.stockOpenML - mlToDeduct) })
+            let mlLeft = mlToDeduct
+            const lots = (await db.stockEntries.where('productId').equals(item.productId).toArray())
+              .sort((a, b) => a.date.localeCompare(b.date))
+            for (const lot of lots) {
+              if (mlLeft <= 0) break
+              const avail = lot.quantityRemaining !== undefined ? lot.quantityRemaining : lot.quantity
+              if (avail <= 0) continue
+              const deduct = Math.min(avail, mlLeft)
+              await db.stockEntries.update(lot.id!, { quantityRemaining: avail - deduct })
+              mlLeft -= deduct
+            }
+            const cpm = product.costPYG  // Gs/ml (stored per ML for decant_source)
+            await db.decantBatches.add({
+              productId: item.productId, sizeML, quantity: item.quantity,
+              supplyId: 0,
+              costPerDecant: cpm * sizeML,
+              sellingPricePYG: item.unitPrice,
+              mlUsed: mlToDeduct, stockRemaining: 0,
+              date: order.orderDate,
+              notes: `Venta parcial — ${order.customerName}`,
               sourceType: 'local_order', sourceId: id,
               createdAt: now,
             })
@@ -342,7 +388,7 @@ export function Logistica() {
       if (item.type === 'sealed') {
         const product = await db.products.get(item.productId)
         unitCost = product?.costPYG ?? 0
-      } else if (item.type === 'decant' && item.sizeML) {
+      } else if ((item.type === 'decant' || item.type === 'partial') && item.sizeML) {
         const batch = batches.find(b => b.productId === item.productId && b.sizeML === item.sizeML)
         unitCost = batch?.costPerDecant ?? 0
       }
@@ -502,12 +548,15 @@ export function Logistica() {
               <div key={i} className="flex items-center gap-2 mb-2">
                 <div className="grid grid-cols-5 gap-2 flex-1">
                   <Select value={item.productId} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, productId: e.target.value } : x) }))}
-                    options={[{ value: '0', label: 'Producto...' }, ...products.map(p => ({ value: String(p.id), label: `${p.brand} — ${p.name}` }))]} />
-                  <Select value={item.type} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, type: e.target.value as any } : x) }))}
-                    options={[{ value: 'sealed', label: 'Sellado' }, { value: 'decant', label: 'Decant' }]} />
+                    options={[{ value: '0', label: 'Producto...' }, ...(item.type === 'partial' ? products.filter(p => p.type === 'decant_source') : products).map(p => ({ value: String(p.id), label: item.type === 'partial' ? `${p.brand} — ${p.name} (${p.stockOpenML}ml)` : `${p.brand} — ${p.name}` }))]} />
+                  <Select value={item.type} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, type: e.target.value as any, productId: '0' } : x) }))}
+                    options={[{ value: 'sealed', label: 'Sellado' }, { value: 'decant', label: 'Decant' }, { value: 'partial', label: 'Parcial' }]} />
                   {item.type === 'decant' && (
                     <Select value={item.sizeML} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, sizeML: e.target.value } : x) }))}
                       options={[3, 5, 10, 30].map(s => ({ value: String(s), label: `${s}ml` }))} />
+                  )}
+                  {item.type === 'partial' && (
+                    <Input placeholder="ML a vender" type="number" value={item.sizeML} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, sizeML: e.target.value } : x) }))} />
                   )}
                   <Input placeholder="Cant." type="number" value={item.quantity} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, quantity: e.target.value } : x) }))} />
                   <Input placeholder="Precio Gs." type="number" value={item.unitPrice} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, unitPrice: e.target.value } : x) }))} />
@@ -638,7 +687,7 @@ export function Logistica() {
                 const p = products.find(x => x.id === item.productId)
                 return (
                   <div key={i} className="flex justify-between py-1">
-                    <span className="text-gray-600">{p?.name ?? '—'} {item.sizeML ? `${item.sizeML}ml` : ''} ×{item.quantity}</span>
+                    <span className="text-gray-600">{p?.name ?? '—'} {item.type === 'partial' ? `${item.sizeML}ml (parcial)` : item.sizeML ? `${item.sizeML}ml` : ''} ×{item.quantity}</span>
                     <span className="font-medium">{fmtPYG(item.quantity * item.unitPrice)}</span>
                   </div>
                 )

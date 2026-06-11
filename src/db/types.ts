@@ -135,7 +135,7 @@ export interface DecantBatch {
   createdAt: string
 }
 
-export type SaleItemType = 'sealed' | 'decant'
+export type SaleItemType = 'sealed' | 'decant' | 'partial'
 
 export interface SaleItem {
   id?: number

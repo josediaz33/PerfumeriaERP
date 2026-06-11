@@ -49,11 +49,12 @@ export function Ventas() {
   const [customerPhone, setCustomerPhone] = useState('')
   const [saleDate, setSaleDate] = useState(today())
   const [saleNotes, setSaleNotes] = useState('')
-  const [addType, setAddType] = useState<'sealed' | 'decant'>('sealed')
+  const [addType, setAddType] = useState<'sealed' | 'decant' | 'partial'>('sealed')
   const [addProduct, setAddProduct] = useState('0')
   const [addSize, setAddSize] = useState('5')
   const [addQty, setAddQty] = useState('1')
   const [addPrice, setAddPrice] = useState('')
+  const [addPartialML, setAddPartialML] = useState('')
 
   // Expandir / editar / eliminar venta
   const [expandedSaleId, setExpandedSaleId] = useState<number | null>(null)
@@ -81,6 +82,7 @@ export function Ventas() {
     const productId = parseInt(addProduct)
     const product = products.find(p => p.id === productId)
     if (!product) return
+    if (addType === 'partial' && (!addPartialML || parseInt(addPartialML) <= 0)) return
 
     let unitCost = 0
     let label = ''
@@ -112,23 +114,30 @@ export function Ventas() {
       } else if (lotsUsed.length > 1) {
         lotInfo = `${lotsUsed.length} lotes: ${lotsUsed.map(l => fmtDate(l.date)).join(', ')}`
       }
-    } else {
+    } else if (addType === 'decant') {
       const size = parseInt(addSize)
       sizeML = size
-      const cpm = product.costPYG / product.sizeML
+      const cpm = product.costPYG  // Gs/ml (stored per ML for decant_source)
       const batch = batches.find(b => b.productId === productId && b.sizeML === size)
       const supplyCost = batch ? (batch.costPerDecant - cpm * size) : 0
       unitCost = cpm * size + supplyCost
       label = `${product.brand} — ${product.name} ${size}ml (decant)`
+    } else if (addType === 'partial') {
+      const ml = parseInt(addPartialML)
+      sizeML = ml
+      const cpm = product.costPYG  // Gs/ml (stored per ML for decant_source)
+      unitCost = cpm * ml
+      label = `${product.brand} — ${product.name} ${ml}ml (parcial)`
     }
 
+    const qty = addType === 'partial' ? 1 : (parseInt(addQty) || 1)
     const existing = cart.findIndex(c => c.productId === productId && c.type === addType && c.sizeML === sizeML)
-    if (existing >= 0) {
-      setCart(c => c.map((item, i) => i === existing ? { ...item, quantity: item.quantity + parseInt(addQty) } : item))
+    if (existing >= 0 && addType !== 'partial') {
+      setCart(c => c.map((item, i) => i === existing ? { ...item, quantity: item.quantity + qty } : item))
     } else {
       setCart(c => [...c, {
         productId, type: addType, sizeML,
-        quantity: parseInt(addQty) || 1,
+        quantity: qty,
         unitCost: Math.round(unitCost),
         unitPrice: parseFloat(addPrice) || 0,
         label, lotInfo,
@@ -136,6 +145,7 @@ export function Ventas() {
     }
     setAddPrice('')
     setAddQty('1')
+    setAddPartialML('')
   }
 
   const cartTotal = cart.reduce((s, i) => s + i.quantity * i.unitPrice, 0)
@@ -474,7 +484,7 @@ export function Ventas() {
                                               {product ? `${product.brand} — ${product.name}` : `Producto #${si.productId}`}
                                             </p>
                                             <p className="text-xs text-gray-400">
-                                              {si.type === 'sealed' ? 'Sellado' : `Decant ${si.sizeML}ml`}
+                                              {si.type === 'sealed' ? 'Sellado' : si.type === 'partial' ? `Parcial ${si.sizeML}ml` : `Decant ${si.sizeML}ml`}
                                             </p>
                                           </td>
                                           <td className="px-4 py-2.5 text-right text-gray-700">{si.quantity} u.</td>
@@ -524,17 +534,31 @@ export function Ventas() {
           <div className="bg-gray-50 rounded-xl p-4 space-y-3">
             <p className="text-sm font-medium text-gray-700">Agregar producto</p>
             <div className="flex gap-2">
-              {(['sealed', 'decant'] as const).map(t => (
-                <button key={t} onClick={() => setAddType(t)} className={`flex-1 py-2 rounded-lg text-sm font-medium cursor-pointer ${addType === t ? 'bg-violet-600 text-white' : 'bg-white border border-gray-200 text-gray-600'}`}>
-                  {t === 'sealed' ? 'Sellado' : 'Decant'}
+              {(['sealed', 'decant', 'partial'] as const).map(t => (
+                <button key={t} onClick={() => { setAddType(t); setAddProduct('0'); setAddPartialML('') }} className={`flex-1 py-2 rounded-lg text-sm font-medium cursor-pointer ${addType === t ? 'bg-violet-600 text-white' : 'bg-white border border-gray-200 text-gray-600'}`}>
+                  {t === 'sealed' ? 'Sellado' : t === 'decant' ? 'Decant' : 'Parcial'}
                 </button>
               ))}
             </div>
             <Select
-              label="Producto"
+              label={addType === 'partial' ? 'Producto (frasco abierto)' : 'Producto'}
               value={addProduct}
-              onChange={e => setAddProduct(e.target.value)}
-              options={[{ value: '0', label: 'Seleccionar...' }, ...(addType === 'sealed' ? sealedProducts : decantProducts).map(p => ({ value: String(p.id), label: `${p.brand} — ${p.name}` }))]}
+              onChange={e => {
+                setAddProduct(e.target.value)
+                if (addType === 'partial') {
+                  const prod = products.find(p => p.id === parseInt(e.target.value))
+                  if (prod) setAddPartialML(String(prod.stockOpenML))
+                }
+              }}
+              options={[
+                { value: '0', label: 'Seleccionar...' },
+                ...(addType === 'sealed' ? sealedProducts : decantProducts).map(p => ({
+                  value: String(p.id),
+                  label: addType === 'partial'
+                    ? `${p.brand} — ${p.name} (${p.stockOpenML}ml disponibles)`
+                    : `${p.brand} — ${p.name}`,
+                })),
+              ]}
             />
             {addType === 'decant' && (
               <Select
@@ -544,9 +568,20 @@ export function Ventas() {
                 options={[3, 5, 10, 30].map(s => ({ value: String(s), label: `${s}ml` }))}
               />
             )}
-            <div className="grid grid-cols-2 gap-3">
-              <Input label="Cantidad" type="number" value={addQty} onChange={e => setAddQty(e.target.value)} />
-              <Input label="Precio unitario (Gs.)" type="number" value={addPrice} onChange={e => setAddPrice(e.target.value)} />
+            {addType === 'partial' && (
+              <Input
+                label="ML a vender"
+                type="number"
+                value={addPartialML}
+                onChange={e => setAddPartialML(e.target.value)}
+                placeholder="Ej: 40"
+              />
+            )}
+            <div className={`grid gap-3 ${addType === 'partial' ? 'grid-cols-1' : 'grid-cols-2'}`}>
+              {addType !== 'partial' && (
+                <Input label="Cantidad" type="number" value={addQty} onChange={e => setAddQty(e.target.value)} />
+              )}
+              <Input label={addType === 'partial' ? 'Precio total del parcial (Gs.)' : 'Precio unitario (Gs.)'} type="number" value={addPrice} onChange={e => setAddPrice(e.target.value)} />
             </div>
             <Button variant="secondary" className="w-full" onClick={addToCart} disabled={!addProduct || addProduct === '0'}>
               Agregar al carrito
