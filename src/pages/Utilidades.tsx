@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { TrendingUp, RefreshCw, PiggyBank, User, ArrowDownCircle, ChevronDown, ChevronUp, BarChart2 } from 'lucide-react'
+import { TrendingUp, RefreshCw, PiggyBank, User, ArrowDownCircle, ArrowUpCircle, ChevronDown, ChevronUp, BarChart2 } from 'lucide-react'
 import { db } from '../db/db'
 import type { UtilityDistribution } from '../db/types'
 import { fmtPYG, fmtDate, today, nowISO } from '../lib/format'
@@ -20,12 +20,20 @@ export function Utilidades() {
   const sales = useLiveQuery(() => db.sales.orderBy('date').reverse().toArray()) ?? []
   const accounts = useLiveQuery(() => db.accounts.filter(a => a.isActive !== false).toArray()) ?? []
   const distributions = useLiveQuery(() => db.utilityDistributions.orderBy('startDate').reverse().toArray()) ?? []
+  const personalMovements = useLiveQuery(() =>
+    db.movements
+      .filter(m => m.category === 'personal_withdrawal' || m.category === 'personal_return')
+      .toArray()
+      .then(arr => arr.sort((a, b) => b.date.localeCompare(a.date)))
+  ) ?? []
 
   const [restockPct, setRestockPct] = useState('40')
   const [reinvestPct, setReinvestPct] = useState('30')
   const [personalPct, setPersonalPct] = useState('30')
   const [showDistribute, setShowDistribute] = useState(false)
   const [showWithdraw, setShowWithdraw] = useState(false)
+  const [showReturn, setShowReturn] = useState(false)
+  const [showPersonalDetail, setShowPersonalDetail] = useState(false)
   const [showSalesDetail, setShowSalesDetail] = useState(false)
   const [salesFilterMonth, setSalesFilterMonth] = useState('all')
   const [selectedDist, setSelectedDist] = useState<UtilityDistribution | null>(null)
@@ -37,6 +45,12 @@ export function Utilidades() {
     restockPct: '40', reinvestPct: '30', personalPct: '30',
   })
   const [withdrawForm, setWithdrawForm] = useState({ amount: '', accountId: '', description: 'Retiro de ganancia personal' })
+  const [returnForm, setReturnForm] = useState({ amount: '', accountId: '', description: 'Devolución al negocio' })
+
+  // ── Personal balance ─────────────────────────────────────────────────────────
+  const totalWithdrawn = personalMovements.filter(m => m.category === 'personal_withdrawal').reduce((s, m) => s + m.amount, 0)
+  const totalReturned = personalMovements.filter(m => m.category === 'personal_return').reduce((s, m) => s + m.amount, 0)
+  const personalDebt = totalWithdrawn - totalReturned
 
   // ── Core aggregates ──────────────────────────────────────────────────────────
   const currentMonth = today().slice(0, 7)
@@ -53,6 +67,17 @@ export function Utilidades() {
   const reinvestAmount = undistributed * (parseFloat(reinvestPct) / 100)
   const personalAmount = undistributed * (parseFloat(personalPct) / 100)
   const totalPct = parseFloat(restockPct) + parseFloat(reinvestPct) + parseFloat(personalPct)
+
+  // Deuda descontada de la porción personal (calculadora en tiempo real)
+  const calcDebtCovered = Math.min(personalDebt, personalAmount)
+  const calcNetPersonal = Math.max(0, personalAmount - personalDebt)
+
+  // Porción personal para el modal de distribución (basada en el período del formulario)
+  const distPeriodSales = sales.filter(s => s.date >= distForm.startDate && s.date <= distForm.endDate)
+  const distGrossProfit = distPeriodSales.reduce((s, x) => s + x.totalProfit, 0)
+  const distPersonalAmount = distGrossProfit * (parseFloat(distForm.personalPct || '0') / 100)
+  const distDebtCovered = Math.min(personalDebt, distPersonalAmount)
+  const distNetPersonal = Math.max(0, distPersonalAmount - personalDebt)
 
   // ── Monthly breakdown ────────────────────────────────────────────────────────
   const monthlyData = (() => {
@@ -136,6 +161,24 @@ export function Utilidades() {
     setShowWithdraw(false)
   }
 
+  async function handleReturn() {
+    const amount = parseFloat(returnForm.amount)
+    const accId = parseInt(returnForm.accountId)
+    if (!amount || !accId) return
+    const now = nowISO()
+    await db.transaction('rw', db.movements, db.accounts, async () => {
+      await db.movements.add({
+        type: 'income', category: 'personal_return',
+        amount, accountId: accId,
+        description: returnForm.description,
+        date: today(), createdAt: now,
+      })
+      await db.accounts.where('id').equals(accId).modify(a => { a.balance += amount })
+    })
+    setReturnForm({ amount: '', accountId: '', description: 'Devolución al negocio' })
+    setShowReturn(false)
+  }
+
   return (
     <div>
       <PageHeader
@@ -173,6 +216,94 @@ export function Utilidades() {
           <p className="text-xs text-gray-500 mb-1">Ticket promedio</p>
           <p className="text-xl font-bold text-gray-900">{fmtPYG(avgTicket)}</p>
         </div>
+      </div>
+
+      {/* Balance personal */}
+      <div className="mb-6">
+        <button
+          onClick={() => setShowPersonalDetail(v => !v)}
+          className="w-full flex items-center justify-between px-5 py-3.5 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer"
+        >
+          <div className="flex items-center gap-3">
+            <User size={16} className="text-violet-500" />
+            <span className="font-semibold text-gray-900">Balance personal</span>
+            <div className="flex items-center gap-3 text-sm">
+              <span className="text-red-500">↓ {fmtPYG(totalWithdrawn)} retirado</span>
+              <span className="text-green-600">↑ {fmtPYG(totalReturned)} devuelto</span>
+              <span className={`font-semibold ${personalDebt > 0 ? 'text-orange-600' : 'text-green-700'}`}>
+                {personalDebt > 0 ? `Debe ${fmtPYG(personalDebt)}` : personalDebt < 0 ? `A favor ${fmtPYG(-personalDebt)}` : 'Al día'}
+              </span>
+            </div>
+          </div>
+          {showPersonalDetail ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+        </button>
+
+        {showPersonalDetail && (
+          <Card className="mt-1 rounded-t-none border-t-0">
+            <CardBody>
+              {/* Stats */}
+              <div className="grid grid-cols-3 gap-3 mb-4">
+                <div className="bg-red-50 border border-red-100 rounded-xl p-3 text-center">
+                  <p className="text-xs text-red-500 mb-0.5">Total retirado</p>
+                  <p className="font-bold text-red-700">{fmtPYG(totalWithdrawn)}</p>
+                  <p className="text-xs text-red-400 mt-0.5">{personalMovements.filter(m => m.category === 'personal_withdrawal').length} retiros</p>
+                </div>
+                <div className="bg-green-50 border border-green-100 rounded-xl p-3 text-center">
+                  <p className="text-xs text-green-600 mb-0.5">Total devuelto</p>
+                  <p className="font-bold text-green-700">{fmtPYG(totalReturned)}</p>
+                  <p className="text-xs text-green-400 mt-0.5">{personalMovements.filter(m => m.category === 'personal_return').length} devoluciones</p>
+                </div>
+                <div className={`${personalDebt > 0 ? 'bg-orange-50 border-orange-100' : 'bg-violet-50 border-violet-100'} border rounded-xl p-3 text-center`}>
+                  <p className={`text-xs mb-0.5 ${personalDebt > 0 ? 'text-orange-600' : 'text-violet-600'}`}>Saldo pendiente</p>
+                  <p className={`font-bold ${personalDebt > 0 ? 'text-orange-700' : 'text-violet-700'}`}>{fmtPYG(Math.abs(personalDebt))}</p>
+                  <p className={`text-xs mt-0.5 ${personalDebt > 0 ? 'text-orange-400' : 'text-violet-400'}`}>{personalDebt > 0 ? 'a devolver' : personalDebt < 0 ? 'a favor' : 'al día'}</p>
+                </div>
+              </div>
+
+              {/* Historial */}
+              {personalMovements.length === 0 ? (
+                <p className="text-center text-gray-400 text-sm py-4">No hay retiros ni devoluciones registrados</p>
+              ) : (
+                <div className="border border-gray-100 rounded-xl overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr className="border-b border-gray-100">
+                        <th className="text-left px-4 py-2.5 text-gray-500 font-medium text-xs">Fecha</th>
+                        <th className="text-left px-4 py-2.5 text-gray-500 font-medium text-xs">Descripción</th>
+                        <th className="text-left px-4 py-2.5 text-gray-500 font-medium text-xs">Cuenta</th>
+                        <th className="text-right px-4 py-2.5 text-gray-500 font-medium text-xs">Monto</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {personalMovements.map(m => {
+                        const account = accounts.find(a => a.id === m.accountId)
+                        const isReturn = m.category === 'personal_return'
+                        return (
+                          <tr key={m.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50">
+                            <td className="px-4 py-2.5 text-gray-500 text-xs whitespace-nowrap">{fmtDate(m.date)}</td>
+                            <td className="px-4 py-2.5 text-gray-700">
+                              <div className="flex items-center gap-1.5">
+                                {isReturn
+                                  ? <ArrowUpCircle size={13} className="text-green-500 shrink-0" />
+                                  : <ArrowDownCircle size={13} className="text-red-400 shrink-0" />
+                                }
+                                {m.description}
+                              </div>
+                            </td>
+                            <td className="px-4 py-2.5 text-gray-400 text-xs">{account?.name ?? '—'}</td>
+                            <td className={`px-4 py-2.5 text-right font-semibold ${isReturn ? 'text-green-600' : 'text-red-500'}`}>
+                              {isReturn ? '+' : '−'} {fmtPYG(m.amount)}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardBody>
+          </Card>
+        )}
       </div>
 
       {/* Evolución mensual */}
@@ -301,6 +432,26 @@ export function Utilidades() {
                 </div>
               ))}
             </div>
+            {personalDebt > 0 && personalAmount > 0 && (
+              <div className="bg-orange-50 border border-orange-100 rounded-xl px-3 py-2.5 text-xs space-y-1.5">
+                <p className="text-orange-700 font-semibold mb-0.5">Deuda personal activa · {fmtPYG(Math.round(personalDebt))}</p>
+                <div className="flex justify-between text-gray-500">
+                  <span>Porción personal bruta</span>
+                  <span>{fmtPYG(Math.round(personalAmount))}</span>
+                </div>
+                <div className="flex justify-between text-red-500">
+                  <span>Cubre deuda pendiente</span>
+                  <span>−{fmtPYG(Math.round(calcDebtCovered))}</span>
+                </div>
+                <div className={`flex justify-between font-semibold pt-1 border-t border-orange-200 ${calcNetPersonal > 0 ? 'text-violet-700' : 'text-red-600'}`}>
+                  <span>Neto personal disponible</span>
+                  <span>{fmtPYG(Math.round(calcNetPersonal))}</span>
+                </div>
+                {personalDebt > personalAmount && (
+                  <p className="text-orange-500">Deuda restante sin cubrir: {fmtPYG(Math.round(personalDebt - personalAmount))}</p>
+                )}
+              </div>
+            )}
             {totalPct !== 100 && (
               <p className={`text-sm ${totalPct > 100 ? 'text-red-500' : 'text-orange-500'}`}>
                 Los porcentajes suman {totalPct}% (deben sumar 100%)
@@ -312,6 +463,9 @@ export function Utilidades() {
               </Button>
               <Button variant="secondary" icon={<ArrowDownCircle size={15} />} onClick={() => setShowWithdraw(true)}>
                 Retirar
+              </Button>
+              <Button variant="secondary" icon={<ArrowUpCircle size={15} />} onClick={() => setShowReturn(true)}>
+                Devolver
               </Button>
             </div>
           </CardBody>
@@ -602,9 +756,51 @@ export function Utilidades() {
             <Input label="% Reinversión" type="number" value={distForm.reinvestPct} onChange={e => setDistForm(f => ({ ...f, reinvestPct: e.target.value }))} />
             <Input label="% Personal" type="number" value={distForm.personalPct} onChange={e => setDistForm(f => ({ ...f, personalPct: e.target.value }))} />
           </div>
+          {personalDebt > 0 && distPersonalAmount > 0 && (
+            <div className="bg-orange-50 border border-orange-100 rounded-xl px-4 py-3 text-xs space-y-1.5">
+              <p className="font-semibold text-orange-700 mb-0.5">Deuda personal activa: {fmtPYG(Math.round(personalDebt))}</p>
+              <div className="flex justify-between text-gray-600">
+                <span>Porción personal de este período ({distForm.personalPct}%)</span>
+                <span>{fmtPYG(Math.round(distPersonalAmount))}</span>
+              </div>
+              <div className="flex justify-between text-red-500">
+                <span>Cubre deuda pendiente</span>
+                <span>−{fmtPYG(Math.round(distDebtCovered))}</span>
+              </div>
+              <div className={`flex justify-between font-semibold pt-1 border-t border-orange-200 ${distNetPersonal > 0 ? 'text-violet-700' : 'text-orange-700'}`}>
+                <span>Neto personal disponible</span>
+                <span>{fmtPYG(Math.round(distNetPersonal))}</span>
+              </div>
+              {personalDebt > distPersonalAmount && (
+                <p className="text-orange-500">Deuda restante sin cubrir: {fmtPYG(Math.round(personalDebt - distPersonalAmount))}</p>
+              )}
+            </div>
+          )}
           <div className="flex gap-2 pt-2">
             <Button variant="secondary" className="flex-1" onClick={() => setShowDistribute(false)}>Cancelar</Button>
             <Button className="flex-1" onClick={handleDistribute}>Registrar</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Modal devolución */}
+      <Modal isOpen={showReturn} onClose={() => setShowReturn(false)} title="Registrar devolución al negocio">
+        <div className="space-y-4">
+          <div className="bg-green-50 border border-green-100 rounded-xl px-4 py-3 text-sm text-green-700">
+            Saldo pendiente actual: <span className="font-bold">{fmtPYG(Math.max(0, personalDebt))}</span>
+            {personalDebt <= 0 && <span className="ml-1 text-green-500">(ya está al día)</span>}
+          </div>
+          <Input label="Monto a devolver (Gs.)" type="number" value={returnForm.amount} onChange={e => setReturnForm(f => ({ ...f, amount: e.target.value }))} />
+          <Select
+            label="Cuenta destino"
+            value={returnForm.accountId}
+            onChange={e => setReturnForm(f => ({ ...f, accountId: e.target.value }))}
+            options={[{ value: '', label: 'Seleccionar...' }, ...accounts.map(a => ({ value: String(a.id), label: `${a.name} — ${fmtPYG(a.balance)}` }))]}
+          />
+          <Input label="Descripción" value={returnForm.description} onChange={e => setReturnForm(f => ({ ...f, description: e.target.value }))} />
+          <div className="flex gap-2 pt-2">
+            <Button variant="secondary" className="flex-1" onClick={() => setShowReturn(false)}>Cancelar</Button>
+            <Button className="flex-1" onClick={handleReturn}>Registrar devolución</Button>
           </div>
         </div>
       </Modal>

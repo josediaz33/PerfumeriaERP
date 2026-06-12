@@ -38,6 +38,11 @@ export function Proveedores() {
   const [receiveRegisterPayment, setReceiveRegisterPayment] = useState(false)
   const [receiveAccountId, setReceiveAccountId] = useState('')
 
+  // Pay order upfront modal
+  const [showPayOrder, setShowPayOrder] = useState(false)
+  const [payingOrder, setPayingOrder] = useState<Order | null>(null)
+  const [payOrderAccountId, setPayOrderAccountId] = useState('')
+
   // Edit received order modal
   const [editOrder, setEditOrder] = useState<Order | null>(null)
   const [editOrderForm, setEditOrderForm] = useState({
@@ -52,6 +57,7 @@ export function Proveedores() {
   const [oForm, setOForm] = useState({
     supplierId: '', exchangeRate: '7500', orderDate: today(), estimatedArrival: '', notes: '',
     localCurrency: false,
+    registerPayment: false, paymentAccountId: '',
     items: [{ productName: '', brand: '', sizeML: '100', quantity: '1', unitPriceUSD: '' }],
   })
   const [activeItemSearch, setActiveItemSearch] = useState<number | null>(null)
@@ -76,24 +82,66 @@ export function Proveedores() {
     const isLocal = oForm.localCurrency
     const exchangeRate = isLocal ? 1 : (parseFloat(oForm.exchangeRate) || 7500)
     const totalUSD = items.reduce((s, i) => s + parseFloat(i.unitPriceUSD) * parseInt(i.quantity), 0)
-    await db.orders.add({
+    const totalPYG = Math.round(totalUSD * exchangeRate)
+    const shouldPay = !!(oForm.registerPayment && oForm.paymentAccountId)
+    const accId = shouldPay ? parseInt(oForm.paymentAccountId) : null
+    const supplierName = suppliers.find(s => s.id === parseInt(oForm.supplierId))?.name ?? 'Proveedor'
+    const now = nowISO()
+    const orderData = {
       supplierId: parseInt(oForm.supplierId),
       items: items.map(i => ({
         productName: i.productName, brand: i.brand, sizeML: parseFloat(i.sizeML),
         quantity: parseInt(i.quantity), unitPriceUSD: parseFloat(i.unitPriceUSD),
       })),
-      totalUSD, exchangeRate, totalPYG: totalUSD * exchangeRate,
+      totalUSD, exchangeRate, totalPYG,
       localCurrency: isLocal || undefined,
-      status: 'pending', orderDate: oForm.orderDate,
+      status: 'pending' as const,
+      orderDate: oForm.orderDate,
       estimatedArrival: oForm.estimatedArrival || undefined,
-      notes: oForm.notes, createdAt: nowISO(),
-    })
+      notes: oForm.notes || undefined,
+      prepaidAmount: shouldPay ? totalPYG : undefined,
+      createdAt: now,
+    }
+    if (shouldPay && accId) {
+      await db.transaction('rw', [db.orders, db.movements, db.accounts], async () => {
+        const orderId = await db.orders.add(orderData)
+        await db.movements.add({
+          type: 'expense', category: 'restock', amount: totalPYG, accountId: accId,
+          description: `Pago anticipado — ${supplierName} (${items.length} producto(s))`,
+          referenceId: orderId as number, referenceType: 'order',
+          date: oForm.orderDate, createdAt: now,
+        })
+        await db.accounts.where('id').equals(accId).modify(a => { a.balance -= totalPYG })
+      })
+    } else {
+      await db.orders.add(orderData)
+    }
     setOForm({
       supplierId: '', exchangeRate: '7500', orderDate: today(), estimatedArrival: '', notes: '',
-      localCurrency: false,
+      localCurrency: false, registerPayment: false, paymentAccountId: '',
       items: [{ productName: '', brand: '', sizeML: '100', quantity: '1', unitPriceUSD: '' }],
     })
     setShowOrder(false)
+  }
+
+  async function handlePayOrder() {
+    if (!payingOrder || !payOrderAccountId) return
+    const accId = parseInt(payOrderAccountId)
+    const totalPYG = payingOrder.totalPYG
+    const supplierName = suppliers.find(s => s.id === payingOrder.supplierId)?.name ?? 'Proveedor'
+    const now = nowISO()
+    await db.transaction('rw', [db.orders, db.movements, db.accounts], async () => {
+      await db.movements.add({
+        type: 'expense', category: 'restock', amount: totalPYG, accountId: accId,
+        description: `Pago anticipado — ${supplierName} (${payingOrder.items.length} producto(s))`,
+        referenceId: payingOrder.id, referenceType: 'order',
+        date: today(), createdAt: now,
+      })
+      await db.accounts.where('id').equals(accId).modify(a => { a.balance -= totalPYG })
+      await db.orders.update(payingOrder.id!, { prepaidAmount: totalPYG })
+    })
+    setShowPayOrder(false)
+    setPayingOrder(null)
   }
 
   async function handleAdvanceStatus(orderId: number, from: OrderStatus) {
@@ -191,17 +239,22 @@ export function Proveedores() {
       await db.orders.update(receivingOrderId, { status: 'received', shippingTotalPYG: shippingTotal })
 
       if (receiveRegisterPayment && receiveAccountId) {
-        const totalPYG = order.totalPYG + shippingTotal
-        const supplierName = suppliers.find(s => s.id === order.supplierId)?.name ?? 'Proveedor'
-        await db.movements.add({
-          type: 'expense', category: 'restock',
-          amount: totalPYG,
-          accountId: parseInt(receiveAccountId),
-          description: `Pedido a ${supplierName} — ${order.items.length} producto(s)`,
-          referenceId: receivingOrderId, referenceType: 'order',
-          date: receiveDate, createdAt: now,
-        })
-        await db.accounts.where('id').equals(parseInt(receiveAccountId)).modify(a => { a.balance -= totalPYG })
+        const isPrepaid = (order.prepaidAmount ?? 0) > 0
+        const amountToPay = isPrepaid ? shippingTotal : (order.totalPYG + shippingTotal)
+        if (amountToPay > 0) {
+          const supplierName = suppliers.find(s => s.id === order.supplierId)?.name ?? 'Proveedor'
+          await db.movements.add({
+            type: 'expense', category: 'restock',
+            amount: amountToPay,
+            accountId: parseInt(receiveAccountId),
+            description: isPrepaid
+              ? `Envío — Pedido a ${supplierName}`
+              : `Pedido a ${supplierName} — ${order.items.length} producto(s)`,
+            referenceId: receivingOrderId, referenceType: 'order',
+            date: receiveDate, createdAt: now,
+          })
+          await db.accounts.where('id').equals(parseInt(receiveAccountId)).modify(a => { a.balance -= amountToPay })
+        }
       }
     })
 
@@ -488,6 +541,14 @@ export function Proveedores() {
                         <td className="px-4 py-3"><Badge color={statusColors[o.status]}>{statusLabels[o.status]}</Badge></td>
                         <td className="px-4 py-3">
                           <div className="flex items-center justify-end gap-2">
+                            {(o.prepaidAmount ?? 0) > 0 && o.status !== 'received' && (
+                              <span className="text-xs text-green-600 font-semibold px-2 py-0.5 bg-green-50 rounded-full">Prepagado</span>
+                            )}
+                            {o.status !== 'received' && !(o.prepaidAmount) && (
+                              <Button size="sm" variant="secondary" onClick={() => { setPayingOrder(o); setPayOrderAccountId(accounts[0] ? String(accounts[0].id) : ''); setShowPayOrder(true) }}>
+                                Pagar
+                              </Button>
+                            )}
                             {o.status === 'pending' && (
                               <Button size="sm" variant="secondary" onClick={() => handleAdvanceStatus(o.id!, 'pending')}>
                                 Confirmar
@@ -723,9 +784,33 @@ export function Proveedores() {
           )}
 
           <Textarea label="Notas (opcional)" value={oForm.notes} onChange={e => setOForm(f => ({ ...f, notes: e.target.value }))} rows={2} />
+
+          <div className="border-t border-gray-100 pt-4 space-y-3">
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <div
+                onClick={() => setOForm(f => ({ ...f, registerPayment: !f.registerPayment, paymentAccountId: f.paymentAccountId || (accounts[0] ? String(accounts[0].id) : '') }))}
+                className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${oForm.registerPayment ? 'bg-violet-600' : 'bg-gray-200'}`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${oForm.registerPayment ? 'translate-x-5' : ''}`} />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-700">Registrar pago anticipado al proveedor</p>
+                {oForm.registerPayment && <p className="text-xs text-violet-600">Se descontará el total de productos de la cuenta seleccionada.</p>}
+              </div>
+            </label>
+            {oForm.registerPayment && (
+              <Select
+                label="Cuenta de débito"
+                value={oForm.paymentAccountId}
+                onChange={e => setOForm(f => ({ ...f, paymentAccountId: e.target.value }))}
+                options={[{ value: '', label: 'Seleccionar...' }, ...accounts.map(a => ({ value: String(a.id), label: `${a.name} (${fmtPYG(a.balance)})` }))]}
+              />
+            )}
+          </div>
+
           <div className="flex gap-2 pt-2">
             <Button variant="secondary" className="flex-1" onClick={() => setShowOrder(false)}>Cancelar</Button>
-            <Button className="flex-1" onClick={handleCreateOrder}>Crear pedido</Button>
+            <Button className="flex-1" onClick={handleCreateOrder} disabled={oForm.registerPayment && !oForm.paymentAccountId}>Crear pedido</Button>
           </div>
         </div>
       </Modal>
@@ -800,7 +885,12 @@ export function Proveedores() {
             <div className="bg-violet-50 rounded-lg p-3 text-sm space-y-1">
               <div className="flex justify-between text-gray-600">
                 <span>Productos</span>
-                <span>{fmtPYG(receivingOrder.totalPYG)}</span>
+                <div className="flex items-center gap-2">
+                  <span>{fmtPYG(receivingOrder.totalPYG)}</span>
+                  {(receivingOrder.prepaidAmount ?? 0) > 0 && (
+                    <span className="text-xs text-green-600 font-semibold bg-green-50 px-1.5 py-0.5 rounded-full">Prepagado</span>
+                  )}
+                </div>
               </div>
               {parseFloat(receiveShipping) > 0 && (
                 <div className="flex justify-between text-gray-600">
@@ -809,32 +899,46 @@ export function Proveedores() {
                 </div>
               )}
               <div className="flex justify-between font-bold pt-1 border-t border-violet-200 text-violet-700">
-                <span>Total</span>
-                <span>{fmtPYG(receivingOrder.totalPYG + (parseFloat(receiveShipping) || 0))}</span>
+                <span>{(receivingOrder.prepaidAmount ?? 0) > 0 ? 'Pendiente de pago' : 'Total'}</span>
+                <span>
+                  {(receivingOrder.prepaidAmount ?? 0) > 0
+                    ? fmtPYG(parseFloat(receiveShipping) || 0)
+                    : fmtPYG(receivingOrder.totalPYG + (parseFloat(receiveShipping) || 0))}
+                </span>
               </div>
             </div>
 
             {/* Opción de pago */}
-            <div>
-              <label className="flex items-center gap-2 cursor-pointer select-none text-sm">
-                <input
-                  type="checkbox"
-                  checked={receiveRegisterPayment}
-                  onChange={e => setReceiveRegisterPayment(e.target.checked)}
-                  className="rounded border-gray-300"
-                />
-                <span className="text-gray-700">Registrar pago en finanzas</span>
-              </label>
-              {receiveRegisterPayment && (
-                <Select
-                  className="mt-3"
-                  label="Cuenta de débito"
-                  value={receiveAccountId}
-                  onChange={e => setReceiveAccountId(e.target.value)}
-                  options={accounts.map(a => ({ value: String(a.id), label: `${a.name} (${fmtPYG(a.balance)})` }))}
-                />
-              )}
-            </div>
+            {(receivingOrder.prepaidAmount ?? 0) > 0 ? (
+              <div className="space-y-3">
+                <div className="bg-green-50 border border-green-100 rounded-lg px-3 py-2 text-sm text-green-700">
+                  Productos pagados por adelantado: <span className="font-semibold">{fmtPYG(receivingOrder.prepaidAmount!)}</span>
+                </div>
+                {parseFloat(receiveShipping) > 0 && (
+                  <div>
+                    <label className="flex items-center gap-2 cursor-pointer select-none text-sm">
+                      <input type="checkbox" checked={receiveRegisterPayment} onChange={e => setReceiveRegisterPayment(e.target.checked)} className="rounded border-gray-300" />
+                      <span className="text-gray-700">Registrar pago de envío ({fmtPYG(parseFloat(receiveShipping))})</span>
+                    </label>
+                    {receiveRegisterPayment && (
+                      <Select className="mt-3" label="Cuenta de débito" value={receiveAccountId} onChange={e => setReceiveAccountId(e.target.value)}
+                        options={accounts.map(a => ({ value: String(a.id), label: `${a.name} (${fmtPYG(a.balance)})` }))} />
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer select-none text-sm">
+                  <input type="checkbox" checked={receiveRegisterPayment} onChange={e => setReceiveRegisterPayment(e.target.checked)} className="rounded border-gray-300" />
+                  <span className="text-gray-700">Registrar pago en finanzas</span>
+                </label>
+                {receiveRegisterPayment && (
+                  <Select className="mt-3" label="Cuenta de débito" value={receiveAccountId} onChange={e => setReceiveAccountId(e.target.value)}
+                    options={accounts.map(a => ({ value: String(a.id), label: `${a.name} (${fmtPYG(a.balance)})` }))} />
+                )}
+              </div>
+            )}
 
             <div className="flex gap-2 pt-2">
               <Button variant="secondary" className="flex-1" onClick={() => setShowReceive(false)}>Cancelar</Button>
@@ -843,6 +947,38 @@ export function Proveedores() {
           </div>
         </Modal>
       )}
+
+      {/* Modal pago anticipado standalone */}
+      <Modal isOpen={showPayOrder} onClose={() => { setShowPayOrder(false); setPayingOrder(null) }} title="Registrar pago anticipado">
+        {payingOrder && (
+          <div className="space-y-4">
+            <div className="bg-gray-50 rounded-xl p-3 text-sm space-y-1">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Proveedor</span>
+                <span className="font-medium text-gray-900">{suppliers.find(s => s.id === payingOrder.supplierId)?.name ?? '—'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Total a pagar</span>
+                <span className="font-bold text-gray-900">{fmtPYG(payingOrder.totalPYG)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Productos</span>
+                <span className="text-gray-600">{payingOrder.items.length} ítem(s)</span>
+              </div>
+            </div>
+            <Select
+              label="Cuenta de débito"
+              value={payOrderAccountId}
+              onChange={e => setPayOrderAccountId(e.target.value)}
+              options={[{ value: '', label: 'Seleccionar...' }, ...accounts.map(a => ({ value: String(a.id), label: `${a.name} (${fmtPYG(a.balance)})` }))]}
+            />
+            <div className="flex gap-2 pt-2">
+              <Button variant="secondary" className="flex-1" onClick={() => { setShowPayOrder(false); setPayingOrder(null) }}>Cancelar</Button>
+              <Button className="flex-1" onClick={handlePayOrder} disabled={!payOrderAccountId}>Registrar pago</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* Modal editar pedido recibido */}
       <Modal isOpen={!!editOrder} onClose={() => setEditOrder(null)} title="Editar pedido recibido" size="lg">

@@ -21,6 +21,7 @@ export type MovementCategory =
   | 'shipping'
   | 'services'
   | 'personal_withdrawal'
+  | 'personal_return'
   | 'transfer'
   | 'other'
 
@@ -218,6 +219,7 @@ export interface Order {
   exchangeRate: number
   totalPYG: number
   shippingTotalPYG?: number
+  prepaidAmount?: number
   localCurrency?: boolean
   status: OrderStatus
   orderDate: string

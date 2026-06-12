@@ -237,16 +237,54 @@ export function Ventas() {
   // ── Eliminar venta ──
   async function handleDeleteSale(sale: Sale) {
     const msgExtra = sale.referenceType === 'local_order'
-      ? 'El saldo de la cuenta será revertido. El stock NO se restaura (producto ya entregado).'
+      ? 'El stock y saldo de cuenta serán restaurados. El pedido de logística se eliminará.'
       : 'El stock y saldo de cuenta serán revertidos automáticamente.'
     if (!confirm(`¿Eliminar la venta de ${fmtPYG(sale.totalAmount)} del ${fmtDate(sale.date)}?\n${msgExtra}`)) return
 
-    // Ventas provenientes de logística: revertir cobro + eliminar pedido completo
+    // Ventas provenientes de logística: revertir cobro + restaurar stock + eliminar pedido
     if (sale.referenceType === 'local_order' && sale.referenceId) {
+      const items = await db.saleItems.where('saleId').equals(sale.id!).toArray()
       const movement = await db.movements.where('referenceId').equals(sale.referenceId).filter(m => m.referenceType === 'local_order').first()
-      await db.transaction('rw', [db.sales, db.saleItems, db.accounts, db.movements, db.localOrders], async () => {
+      await db.transaction('rw', [db.sales, db.saleItems, db.accounts, db.movements, db.localOrders, db.products, db.stockEntries, db.supplies, db.decantBatches], async () => {
         await db.accounts.where('id').equals(sale.accountId).modify(a => { a.balance -= sale.totalAmount })
         if (movement?.id) await db.movements.delete(movement.id)
+        for (const item of items) {
+          if (item.type === 'sealed') {
+            await db.products.where('id').equals(item.productId).modify(p => { p.stockSealed += item.quantity })
+            const lots = (await db.stockEntries.where('productId').equals(item.productId).toArray())
+              .filter(l => l.quantityRemaining !== undefined).sort((a, b) => b.date.localeCompare(a.date))
+            let rem = item.quantity
+            for (const lot of lots) {
+              if (rem <= 0) break
+              const used = lot.quantity - lot.quantityRemaining!
+              if (used <= 0) continue
+              const back = Math.min(used, rem)
+              await db.stockEntries.update(lot.id!, { quantityRemaining: lot.quantityRemaining! + back })
+              rem -= back
+            }
+          } else if (item.type === 'decant' && item.sizeML) {
+            const ml = item.quantity * item.sizeML
+            await db.products.where('id').equals(item.productId).modify(p => { p.stockOpenML += ml })
+            const lots = (await db.stockEntries.where('productId').equals(item.productId).toArray())
+              .filter(l => l.quantityRemaining !== undefined).sort((a, b) => b.date.localeCompare(a.date))
+            let mlRem = ml
+            for (const lot of lots) {
+              if (mlRem <= 0) break
+              const used = lot.quantity - lot.quantityRemaining!
+              if (used <= 0) continue
+              const back = Math.min(used, mlRem)
+              await db.stockEntries.update(lot.id!, { quantityRemaining: lot.quantityRemaining! + back })
+              mlRem -= back
+            }
+            const supply = allSupplies.find(s => s.sizeML === item.sizeML)
+            if (supply?.id) await db.supplies.update(supply.id, { stock: supply.stock + item.quantity, updatedAt: nowISO() })
+            const batches = await db.decantBatches.where('productId').equals(item.productId).toArray()
+            const match = batches.find(b => b.sourceType === 'local_order' && b.sourceId === sale.referenceId && b.sizeML === item.sizeML)
+            if (match?.id) await db.decantBatches.delete(match.id)
+          } else if (item.type === 'partial' && item.sizeML) {
+            await db.products.where('id').equals(item.productId).modify(p => { p.stockOpenML += item.quantity * item.sizeML })
+          }
+        }
         await db.saleItems.where('saleId').equals(sale.id!).delete()
         await db.sales.delete(sale.id!)
         await db.localOrders.delete(sale.referenceId!)

@@ -144,10 +144,12 @@ Al pasar un pedido a "Preparar", `advanceStatus` descuenta automáticamente el f
 - **Abrir para decants**: botón que descuenta 1 unidad sellada/tester por FIFO y suma los ML al stock abierto; permite convertir cualquier producto en fuente de decants
 - **Lotes (StockEntry)**: costo USD + cotización → costo PYG; CPP recalculado al agregar lotes
 - **Edición de lotes en cascada**: cambiar precio propaga el delta al movimiento contable y al saldo de la cuenta
+- **Ingreso rápido con trazabilidad**: al agregar stock con proveedor seleccionado (tanto producto individual como lote múltiple), se crea un `Order` con `status: 'received'` que aparece en el historial del proveedor
 
 ### Proveedores
 - Recepción de pedidos: genera `StockEntry` por producto, distribuye el flete proporcionalmente, recalcula CPP
 - **Edición de pedidos recibidos**: modal con cambio de cotización, flete y precios por ítem; cascade completo a stock entries, CPP de productos, movimiento y saldo
+- **Pago anticipado**: al crear un pedido o desde la tabla de pedidos activos, se puede registrar el pago del total de productos antes de recepcionar. Al recepcionar un pedido prepagado, solo se descuenta el envío
 
 ### Presupuestos
 - **Tipos de línea**: Sellado, Tester, Decant (tamaños 3/5/10/30ml), Parcial, Personalizado
@@ -164,6 +166,7 @@ Al pasar un pedido a "Preparar", `advanceStatus` descuenta automáticamente el f
 - Al preparar: descuenta stock del producto + FIFO sobre lotes + frascos por ítem decant + crea `DecantBatch`
 - Señas con movimiento contable inmediato; saldo calculado al entregar
 - **Reversión a Pendiente**: restaura ML/stock, elimina DecantBatch, repone frascos en insumos
+- **Eliminar venta de logística**: revierte cobro, restaura stock (FIFO + frascos + ML), elimina `DecantBatch` y el pedido asociado
 
 ### Cuentas
 - Historial por cuenta: filtro de mes, resumen ingresos/egresos/saldo del período, tabla de movimientos
@@ -173,8 +176,9 @@ Al pasar un pedido a "Preparar", `advanceStatus` descuenta automáticamente el f
 - **6 KPIs**: utilidad acumulada, utilidad del mes, distribuido, sin distribuir, margen promedio, ticket promedio
 - **Evolución mensual**: tabla con mini-barras de ingresos/costos/ganancia por mes (últimos 12); margen coloreado (verde ≥40%, naranja 20–39%, rojo <20%)
 - **Detalle de ventas**: sección colapsable, filtro por mes en chips, tabla individual por venta con margen %
-- **Distribución**: calculadora con porcentajes configurables; registra distribución por período
+- **Distribución**: calculadora con porcentajes configurables; registra distribución por período. Si hay deuda personal activa, muestra desglose: porción bruta → deuda cubierta → neto disponible (informativo)
 - **Historial de distribuciones clickeable**: modal con ventas del período, desglose de los 3 destinos y métricas
+- **Balance personal**: panel con total retirado, devuelto y saldo pendiente; historial entrelazado; botones "Retirar" y "Devolver"
 
 ---
 

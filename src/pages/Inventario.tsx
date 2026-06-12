@@ -374,9 +374,10 @@ export function Inventario() {
 
     const totalUSDValue = computed.reduce((s, i) => s + i.usdValue, 0)
 
-    await db.transaction('rw', db.products, db.stockEntries, db.shipmentBatches, async () => {
+    await db.transaction('rw', db.products, db.stockEntries, db.shipmentBatches, db.orders, async () => {
+      const batchSuppId = batchSupplierId ? parseInt(batchSupplierId) : undefined
       const batchId = await db.shipmentBatches.add({
-        supplierId: batchSupplierId ? parseInt(batchSupplierId) : undefined,
+        supplierId: batchSuppId,
         date: batchDate,
         description: `Lote de ${validItems.length} producto(s)`,
         exchangeRate: rate,
@@ -407,7 +408,7 @@ export function Inventario() {
         })
         await db.stockEntries.add({
           productId: prod.id!,
-          supplierId: batchSupplierId ? parseInt(batchSupplierId) : undefined,
+          supplierId: batchSuppId,
           shipmentBatchId: batchId as number,
           quantity: actualQty,
           quantityRemaining: actualQty,
@@ -416,6 +417,24 @@ export function Inventario() {
           costPYG: batchCostPYG,
           type: prod.type,
           date: batchDate,
+          createdAt: now,
+        })
+      }
+
+      if (batchSuppId) {
+        await db.orders.add({
+          supplierId: batchSuppId,
+          items: computed.map(item => ({
+            productName: item.prod.name, brand: item.prod.brand, sizeML: item.prod.sizeML,
+            quantity: Math.round(item.formQty), unitPriceUSD: item.formQty > 0 ? item.usdValue / item.formQty : 0,
+          })),
+          totalUSD: totalUSDValue,
+          exchangeRate: rate,
+          totalPYG: Math.round(totalUSDValue * rate + totalShipping),
+          shippingTotalPYG: totalShipping,
+          localCurrency: batchLocalCurrency,
+          status: 'received',
+          orderDate: batchDate,
           createdAt: now,
         })
       }
@@ -458,9 +477,11 @@ export function Inventario() {
       ? parseInt(stockForm.paymentAccountId)
       : null
     const totalPayment = Math.round(qty * batchCostPYG)
+    const supplierId = stockForm.supplierId ? parseInt(stockForm.supplierId) : undefined
+    const orderItem = { productName: product.name, brand: product.brand, sizeML: product.sizeML, quantity: Math.round(formQty), unitPriceUSD: costInput }
 
     if (payAccount) {
-      await db.transaction('rw', db.products, db.stockEntries, db.movements, db.accounts, async () => {
+      await db.transaction('rw', [db.products, db.stockEntries, db.movements, db.accounts, db.orders], async () => {
         await db.products.where('id').equals(product.id!).modify(p => {
           if (stockForm.type === 'sealed') p.stockSealed += qty
           else p.stockOpenML += qty
@@ -469,7 +490,7 @@ export function Inventario() {
           p.exchangeRateUsed = exchangeRate
         })
         const entryId = await db.stockEntries.add({
-          productId: product.id!, supplierId: stockForm.supplierId ? parseInt(stockForm.supplierId) : undefined,
+          productId: product.id!, supplierId,
           quantity: qty, quantityRemaining: qty, costUSD, exchangeRate, costPYG: batchCostPYG,
           type: stockForm.type, date: stockForm.date, createdAt: now,
         })
@@ -481,9 +502,16 @@ export function Inventario() {
           date: stockForm.date, createdAt: now,
         })
         await db.accounts.where('id').equals(payAccount).modify(a => { a.balance -= totalPayment })
+        if (supplierId) {
+          await db.orders.add({
+            supplierId, items: [orderItem], totalUSD: formQty * costInput,
+            exchangeRate, totalPYG: totalPayment, shippingTotalPYG: shippingTotal,
+            localCurrency: isLocal, status: 'received', orderDate: stockForm.date, createdAt: now,
+          })
+        }
       })
     } else {
-      await db.transaction('rw', db.products, db.stockEntries, async () => {
+      await db.transaction('rw', db.products, db.stockEntries, db.orders, async () => {
         await db.products.where('id').equals(product.id!).modify(p => {
           if (stockForm.type === 'sealed') p.stockSealed += qty
           else p.stockOpenML += qty
@@ -492,10 +520,17 @@ export function Inventario() {
           p.exchangeRateUsed = exchangeRate
         })
         await db.stockEntries.add({
-          productId: product.id!, supplierId: stockForm.supplierId ? parseInt(stockForm.supplierId) : undefined,
+          productId: product.id!, supplierId,
           quantity: qty, quantityRemaining: qty, costUSD, exchangeRate, costPYG: batchCostPYG,
           type: stockForm.type, date: stockForm.date, createdAt: now,
         })
+        if (supplierId) {
+          await db.orders.add({
+            supplierId, items: [orderItem], totalUSD: formQty * costInput,
+            exchangeRate, totalPYG: totalPayment, shippingTotalPYG: shippingTotal,
+            localCurrency: isLocal, status: 'received', orderDate: stockForm.date, createdAt: now,
+          })
+        }
       })
     }
     setStockForm(emptyStockForm)

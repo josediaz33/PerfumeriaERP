@@ -19,6 +19,7 @@ const categories: { value: MovementCategory; label: string; type: MovementType }
   { value: 'shipping', label: 'Envío', type: 'expense' },
   { value: 'services', label: 'Servicios', type: 'expense' },
   { value: 'personal_withdrawal', label: 'Retiro personal', type: 'expense' },
+  { value: 'personal_return', label: 'Devolución personal', type: 'income' },
   { value: 'other', label: 'Otro ingreso', type: 'income' },
 ]
 
@@ -30,6 +31,7 @@ const categoryColors: Record<MovementCategory, 'green' | 'red' | 'orange' | 'blu
   shipping: 'blue',
   services: 'gray',
   personal_withdrawal: 'red',
+  personal_return: 'green',
   transfer: 'violet',
   other: 'gray',
 }
