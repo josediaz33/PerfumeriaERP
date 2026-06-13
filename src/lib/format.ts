@@ -15,9 +15,10 @@ export function fmtUSD(amount: number): string {
   }).format(amount)
 }
 
-export function fmtDate(dateStr: string): string {
-  // Parse as local noon to avoid UTC-offset shifting the day
+export function fmtDate(dateStr: string | undefined | null): string {
+  if (!dateStr) return '—'
   const [y, m, d] = dateStr.split('-').map(Number)
+  if (isNaN(y) || isNaN(m) || isNaN(d)) return '—'
   return new Intl.DateTimeFormat('es-PY', {
     day: '2-digit',
     month: '2-digit',
