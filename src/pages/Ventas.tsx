@@ -23,6 +23,7 @@ const paymentColors: Record<PaymentMethod, 'green' | 'blue' | 'violet' | 'gray'>
 
 interface CartItem {
   productId: number
+  supplyId?: number
   type: SaleItemType
   sizeML?: number
   quantity: number
@@ -52,8 +53,9 @@ export function Ventas() {
   const [customerPhone, setCustomerPhone] = useState('')
   const [saleDate, setSaleDate] = useState(today())
   const [saleNotes, setSaleNotes] = useState('')
-  const [addType, setAddType] = useState<'sealed' | 'decant' | 'partial'>('sealed')
+  const [addType, setAddType] = useState<'sealed' | 'decant' | 'partial' | 'supply'>('sealed')
   const [addProduct, setAddProduct] = useState('0')
+  const [addSupply, setAddSupply] = useState('0')
   const [addSize, setAddSize] = useState('5')
   const [addQty, setAddQty] = useState('1')
   const [addPrice, setAddPrice] = useState('')
@@ -82,6 +84,27 @@ export function Ventas() {
 
   // ── Nueva venta ──
   function addToCart() {
+    if (addType === 'supply') {
+      const supplyId = parseInt(addSupply)
+      const supply = allSupplies.find(s => s.id === supplyId)
+      if (!supply) return
+      const qty = parseInt(addQty) || 1
+      const existing = cart.findIndex(c => c.supplyId === supplyId && c.type === 'supply')
+      if (existing >= 0) {
+        setCart(c => c.map((item, i) => i === existing ? { ...item, quantity: item.quantity + qty } : item))
+      } else {
+        setCart(c => [...c, {
+          productId: 0, supplyId, type: 'supply', quantity: qty,
+          unitCost: supply.costPYG,
+          unitPrice: parseFloat(addPrice) || 0,
+          label: `${supply.name} (insumo)`,
+        }])
+      }
+      setAddPrice('')
+      setAddQty('1')
+      return
+    }
+
     const productId = parseInt(addProduct)
     const product = products.find(p => p.id === productId)
     if (!product) return
@@ -167,6 +190,7 @@ export function Ventas() {
       customerAddress: undefined,
       items: cart.map(item => ({
         productId: item.productId,
+        supplyId: item.supplyId,
         type: item.type,
         sizeML: item.sizeML,
         quantity: item.quantity,
@@ -282,7 +306,11 @@ export function Ventas() {
             const match = batches.find(b => b.sourceType === 'local_order' && b.sourceId === sale.referenceId && b.sizeML === item.sizeML)
             if (match?.id) await db.decantBatches.delete(match.id)
           } else if (item.type === 'partial' && item.sizeML) {
-            await db.products.where('id').equals(item.productId).modify(p => { p.stockOpenML += item.quantity * item.sizeML })
+            const partialML = item.sizeML
+            await db.products.where('id').equals(item.productId).modify(p => { p.stockOpenML += item.quantity * partialML })
+          } else if (item.type === 'supply' && item.supplyId) {
+            const sup = allSupplies.find(s => s.id === item.supplyId)
+            if (sup?.id) await db.supplies.update(sup.id, { stock: sup.stock + item.quantity, updatedAt: nowISO() })
           }
         }
         await db.saleItems.where('saleId').equals(sale.id!).delete()
@@ -583,32 +611,47 @@ export function Ventas() {
           <div className="bg-gray-50 rounded-xl p-4 space-y-3">
             <p className="text-sm font-medium text-gray-700">Agregar producto</p>
             <div className="flex gap-2">
-              {(['sealed', 'decant', 'partial'] as const).map(t => (
-                <button key={t} onClick={() => { setAddType(t); setAddProduct('0'); setAddPartialML('') }} className={`flex-1 py-2 rounded-lg text-sm font-medium cursor-pointer ${addType === t ? 'bg-violet-600 text-white' : 'bg-white border border-gray-200 text-gray-600'}`}>
-                  {t === 'sealed' ? 'Sellado' : t === 'decant' ? 'Decant' : 'Parcial'}
+              {(['sealed', 'decant', 'partial', 'supply'] as const).map(t => (
+                <button key={t} onClick={() => { setAddType(t); setAddProduct('0'); setAddPartialML(''); setAddSupply('0') }} className={`flex-1 py-2 rounded-lg text-sm font-medium cursor-pointer ${addType === t ? 'bg-violet-600 text-white' : 'bg-white border border-gray-200 text-gray-600'}`}>
+                  {t === 'sealed' ? 'Sellado' : t === 'decant' ? 'Decant' : t === 'partial' ? 'Parcial' : 'Insumo'}
                 </button>
               ))}
             </div>
-            <Select
-              label={addType === 'partial' ? 'Producto (frasco abierto)' : 'Producto'}
-              value={addProduct}
-              onChange={e => {
-                setAddProduct(e.target.value)
-                if (addType === 'partial') {
-                  const prod = products.find(p => p.id === parseInt(e.target.value))
-                  if (prod) setAddPartialML(String(prod.stockOpenML))
-                }
-              }}
-              options={[
-                { value: '0', label: 'Seleccionar...' },
-                ...(addType === 'sealed' ? sealedProducts : decantProducts).map(p => ({
-                  value: String(p.id),
-                  label: addType === 'partial'
-                    ? `${p.brand} — ${p.name} (${p.stockOpenML}ml disponibles)`
-                    : `${p.brand} — ${p.name}`,
-                })),
-              ]}
-            />
+            {addType === 'supply' ? (
+              <Select
+                label="Insumo"
+                value={addSupply}
+                onChange={e => setAddSupply(e.target.value)}
+                options={[
+                  { value: '0', label: 'Seleccionar...' },
+                  ...allSupplies.map(s => ({
+                    value: String(s.id),
+                    label: `${s.name} (stock: ${s.stock})`,
+                  })),
+                ]}
+              />
+            ) : (
+              <Select
+                label={addType === 'partial' ? 'Producto (frasco abierto)' : 'Producto'}
+                value={addProduct}
+                onChange={e => {
+                  setAddProduct(e.target.value)
+                  if (addType === 'partial') {
+                    const prod = products.find(p => p.id === parseInt(e.target.value))
+                    if (prod) setAddPartialML(String(prod.stockOpenML))
+                  }
+                }}
+                options={[
+                  { value: '0', label: 'Seleccionar...' },
+                  ...(addType === 'sealed' ? sealedProducts : decantProducts).map(p => ({
+                    value: String(p.id),
+                    label: addType === 'partial'
+                      ? `${p.brand} — ${p.name} (${p.stockOpenML}ml disponibles)`
+                      : `${p.brand} — ${p.name}`,
+                  })),
+                ]}
+              />
+            )}
             {addType === 'decant' && (
               <Select
                 label="Tamaño"
@@ -632,7 +675,7 @@ export function Ventas() {
               )}
               <Input label={addType === 'partial' ? 'Precio total del parcial (Gs.)' : 'Precio unitario (Gs.)'} type="number" value={addPrice} onChange={e => setAddPrice(e.target.value)} />
             </div>
-            <Button variant="secondary" className="w-full" onClick={addToCart} disabled={!addProduct || addProduct === '0'}>
+            <Button variant="secondary" className="w-full" onClick={addToCart} disabled={addType === 'supply' ? (!addSupply || addSupply === '0') : (!addProduct || addProduct === '0')}>
               Agregar al carrito
             </Button>
           </div>

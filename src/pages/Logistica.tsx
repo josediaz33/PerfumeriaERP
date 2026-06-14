@@ -61,7 +61,7 @@ export function Logistica() {
     shippingCost: '0', shippingPaidBy: 'customer' as 'customer' | 'business',
     orderDate: today(), estimatedDelivery: '', notes: '',
     isPreOrder: false,
-    items: [{ productId: '0', type: 'sealed' as 'sealed' | 'decant' | 'partial', sizeML: '5', quantity: '1', unitPrice: '' }],
+    items: [{ productId: '0', type: 'sealed' as 'sealed' | 'decant' | 'partial' | 'supply', sizeML: '5', quantity: '1', unitPrice: '' }],
     supplies: [] as { supplyId: string; quantity: string }[],
   }
 
@@ -123,6 +123,13 @@ export function Logistica() {
         const mlNeeded = item.quantity * item.sizeML
         if (product.stockOpenML < mlNeeded) {
           errors.push(`${product.brand} — ${product.name}: ML insuficientes para venta parcial (${product.stockOpenML}ml disponibles, se necesitan ${mlNeeded}ml)`)
+        }
+      } else if (item.type === 'supply' && item.supplyId) {
+        const supply = supplies.find(s => s.id === item.supplyId)
+        if (!supply) {
+          errors.push(`Insumo no encontrado (id: ${item.supplyId})`)
+        } else if (supply.stock < item.quantity) {
+          errors.push(`${supply.name}: stock insuficiente (${supply.stock} disponibles, se necesitan ${item.quantity})`)
         }
       }
     }
@@ -300,6 +307,9 @@ export function Logistica() {
               await db.stockEntries.update(lot.id!, { quantityRemaining: lot.quantityRemaining! + restore })
               left -= restore
             }
+          } else if (item.type === 'supply' && item.supplyId) {
+            const sup = await db.supplies.get(item.supplyId)
+            if (sup?.id) await db.supplies.update(sup.id, { stock: sup.stock + item.quantity, updatedAt: now })
           }
         }
         for (const si of order.supplies) {
@@ -420,6 +430,9 @@ export function Logistica() {
               await db.stockEntries.update(lot.id!, { quantityRemaining: avail - deduct })
               toDeduct -= deduct
             }
+          } else if (item.type === 'supply' && item.supplyId) {
+            const sup = await db.supplies.get(item.supplyId)
+            if (sup?.id) await db.supplies.update(sup.id, { stock: Math.max(0, sup.stock - item.quantity), updatedAt: now })
           }
         }
         for (const si of order.supplies) {
@@ -459,6 +472,9 @@ export function Logistica() {
       } else if ((item.type === 'decant' || item.type === 'partial') && item.sizeML) {
         const batch = batches.find(b => b.productId === item.productId && b.sizeML === item.sizeML)
         unitCost = batch?.costPerDecant ?? 0
+      } else if (item.type === 'supply' && item.supplyId) {
+        const sup = await db.supplies.get(item.supplyId)
+        unitCost = sup?.costPYG ?? 0
       }
       itemCosts.push(unitCost)
     }
@@ -490,6 +506,7 @@ export function Logistica() {
         await db.saleItems.add({
           saleId: saleId as number,
           productId: item.productId,
+          supplyId: item.supplyId,
           type: item.type,
           sizeML: item.sizeML,
           quantity: item.quantity,
@@ -836,10 +853,13 @@ export function Logistica() {
             <div className="border-t border-gray-100 pt-3">
               <p className="font-medium text-gray-700 mb-2">Productos</p>
               {selectedOrder.items.map((item, i) => {
-                const p = products.find(x => x.id === item.productId)
+                const p = item.type !== 'supply' ? products.find(x => x.id === item.productId) : undefined
+                const s = item.type === 'supply' ? supplies.find(x => x.id === item.supplyId) : undefined
+                const displayName = item.type === 'supply' ? (s?.name ?? '—') : (p?.name ?? '—')
+                const typeLabel = item.type === 'partial' ? `${item.sizeML}ml (parcial)` : item.type === 'supply' ? '(insumo)' : item.sizeML ? `${item.sizeML}ml` : ''
                 return (
                   <div key={i} className="flex justify-between py-1">
-                    <span className="text-gray-600">{p?.name ?? '—'} {item.type === 'partial' ? `${item.sizeML}ml (parcial)` : item.sizeML ? `${item.sizeML}ml` : ''} ×{item.quantity}</span>
+                    <span className="text-gray-600">{displayName} {typeLabel} ×{item.quantity}</span>
                     <span className="font-medium">{fmtPYG(item.quantity * item.unitPrice)}</span>
                   </div>
                 )

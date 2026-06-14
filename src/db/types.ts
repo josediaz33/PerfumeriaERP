@@ -137,12 +137,13 @@ export interface DecantBatch {
   createdAt: string
 }
 
-export type SaleItemType = 'sealed' | 'decant' | 'partial'
+export type SaleItemType = 'sealed' | 'decant' | 'partial' | 'supply'
 
 export interface SaleItem {
   id?: number
   saleId: number
   productId: number
+  supplyId?: number
   type: SaleItemType
   sizeML?: number
   quantity: number
@@ -232,6 +233,7 @@ export type LocalOrderStatus = 'pending' | 'preparing' | 'ready' | 'delivered' |
 
 export interface LocalOrderItem {
   productId: number
+  supplyId?: number
   type: SaleItemType
   sizeML?: number
   quantity: number
