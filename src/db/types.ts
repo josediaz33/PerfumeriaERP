@@ -72,10 +72,18 @@ export interface Product {
   stockOpenML: number
   minStock: number
   type: ProductType
-  imageUrl?: string
+  imageIds?: string[]
+  catalogVisible?: boolean
   notes?: string
   createdAt: string
   updatedAt: string
+}
+
+export interface ProductImage {
+  id: string
+  blob: Blob
+  mime: 'image/jpeg' | 'image/png'
+  createdAt: string
 }
 
 export interface StockEntry {

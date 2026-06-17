@@ -1,9 +1,10 @@
-import { useState, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { Search, Download, BookImage } from 'lucide-react'
 import { db } from '../db/db'
 import type { OlfactiveFamily } from '../db/types'
 import { fmtPYG } from '../lib/format'
+import { blobToBase64 } from '../lib/images'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
 import { Badge } from '../components/ui/Badge'
@@ -16,6 +17,23 @@ const families: { value: OlfactiveFamily; label: string }[] = [
   { value: 'fougere', label: 'Fougère' }, { value: 'other', label: 'Otro' },
 ]
 
+function CatalogThumb({ imageId }: { imageId: string }) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    let objectUrl: string | null = null
+    db.images.get(imageId).then(img => {
+      if (img) { objectUrl = URL.createObjectURL(img.blob); setUrl(objectUrl) }
+    })
+    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl) }
+  }, [imageId])
+  if (!url) return (
+    <div className="w-full h-full flex items-center justify-center">
+      <span className="text-5xl select-none">🌸</span>
+    </div>
+  )
+  return <img src={url} alt="" className="w-full h-full object-cover" />
+}
+
 export function Catalogo() {
   const products = useLiveQuery(() => db.products.toArray()) ?? []
   const decantBatches = useLiveQuery(() => db.decantBatches.toArray()) ?? []
@@ -24,9 +42,10 @@ export function Catalogo() {
   const [filterFamily, setFilterFamily] = useState<string>('all')
   const [minPrice, setMinPrice] = useState('')
   const [maxPrice, setMaxPrice] = useState('')
-  const catalogRef = useRef<HTMLDivElement>(null)
 
   const available = products.filter(p => {
+    // Respetar flag explícito (undefined = visible por defecto)
+    if (p.catalogVisible === false) return false
     if (p.type === 'sealed' && p.stockSealed <= 0) return false
     if (p.type === 'decant_source' && p.stockOpenML <= 0) return false
     return true
@@ -46,51 +65,90 @@ export function Catalogo() {
     const { default: jsPDF } = await import('jspdf')
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
 
-    let y = 20
-    doc.setFontSize(22)
-    doc.setFont('helvetica', 'bold')
-    doc.text('JODA Parfums', 105, y, { align: 'center' })
-    y += 8
-    doc.setFontSize(12)
-    doc.setFont('helvetica', 'normal')
-    doc.text('Catálogo de Productos Disponibles', 105, y, { align: 'center' })
-    y += 15
+    // Logo
+    const logoImg = await db.images.get('business-logo')
+    const logoB64 = logoImg ? await blobToBase64(logoImg.blob) : null
+    const logoFmt = logoImg?.mime === 'image/png' ? 'PNG' : 'JPEG'
 
+    // Nombre del negocio desde config
+    const configName = await db.config.where('key').equals('business_name').first()
+    const businessName = configName?.value || 'JODA Parfums'
+    const configPhone = await db.config.where('key').equals('business_phone').first()
+
+    // Header oscuro/dorado igual que presupuestos
+    doc.setFillColor(20, 18, 18)
+    doc.rect(0, 0, 210, 38, 'F')
+    if (logoB64) {
+      doc.addImage(logoB64, logoFmt, 10, 4, 30, 30)
+      doc.setTextColor(200, 169, 110)
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'normal')
+      doc.setTextColor(160, 130, 80)
+      doc.text('Catálogo de Fragancias', 44, 22)
+      if (configPhone?.value) doc.text(configPhone.value, 44, 30)
+    } else {
+      doc.setTextColor(200, 169, 110)
+      doc.setFontSize(20)
+      doc.setFont('helvetica', 'bold')
+      doc.text(businessName, 14, 18)
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'normal')
+      doc.setTextColor(160, 130, 80)
+      doc.text('Catálogo de Fragancias', 14, 26)
+      if (configPhone?.value) doc.text(configPhone.value, 14, 33)
+    }
+    // Fecha top-right
+    doc.setTextColor(160, 130, 80)
+    doc.setFontSize(8)
+    doc.text(new Date().toLocaleDateString('es-PY'), 196, 33, { align: 'right' })
+
+    // Tabla de productos
+    let y = 50
+    doc.setFillColor(20, 18, 18)
+    doc.rect(14, y, 182, 8, 'F')
+    doc.setTextColor(200, 169, 110)
     doc.setFontSize(9)
     doc.setFont('helvetica', 'bold')
-    doc.setFillColor(120, 60, 220)
-    doc.rect(14, y, 182, 7, 'F')
-    doc.setTextColor(255, 255, 255)
-    doc.text('Perfume', 16, y + 5)
-    doc.text('Marca', 70, y + 5)
-    doc.text('Tipo', 110, y + 5)
-    doc.text('Precio', 150, y + 5)
-    doc.text('Stock', 175, y + 5)
-    y += 10
+    doc.text('Perfume', 16, y + 5.5)
+    doc.text('Marca', 80, y + 5.5)
+    doc.text('Tipo', 128, y + 5.5)
+    doc.text('Precio', 162, y + 5.5)
+    y += 12
 
     doc.setFont('helvetica', 'normal')
     doc.setTextColor(30, 27, 46)
 
     filtered.forEach((p, i) => {
-      if (y > 270) { doc.addPage(); y = 20 }
-      if (i % 2 === 0) {
-        doc.setFillColor(248, 247, 255)
-        doc.rect(14, y - 1, 182, 7, 'F')
+      if (y > 265) { doc.addPage(); y = 20 }
+      if (i % 2 === 1) {
+        doc.setFillColor(248, 246, 240)
+        doc.rect(14, y - 2, 182, 9, 'F')
       }
-      doc.text(p.name.slice(0, 28), 16, y + 4)
-      doc.text(p.brand.slice(0, 18), 70, y + 4)
-      doc.text(p.type === 'sealed' ? 'Sellado' : 'Decant', 110, y + 4)
-      doc.text(p.sellingPricePYG > 0 ? `Gs. ${p.sellingPricePYG.toLocaleString('es-PY')}` : '—', 140, y + 4)
-      doc.text(p.type === 'sealed' ? `${p.stockSealed} u.` : `${p.stockOpenML} ml`, 175, y + 4)
-      y += 8
+      const batches = decantBatches.filter(b => b.productId === p.id)
+      const sizes = [...new Set(batches.map(b => b.sizeML))].sort((a, b) => a - b)
+      doc.text(p.name.slice(0, 34), 16, y + 4)
+      doc.text(p.brand.slice(0, 20), 80, y + 4)
+      doc.text(p.type === 'sealed' ? 'Sellado' : 'Decants', 128, y + 4)
+      if (p.type === 'sealed') {
+        doc.text(p.sellingPricePYG > 0 ? `Gs. ${p.sellingPricePYG.toLocaleString('es-PY')}` : '—', 155, y + 4)
+      } else if (sizes.length > 0) {
+        const first = batches.find(b => b.sizeML === sizes[0])
+        doc.text(first?.sellingPricePYG ? `${sizes[0]}ml: Gs. ${first.sellingPricePYG.toLocaleString('es-PY')}` : '—', 155, y + 4)
+      } else {
+        doc.text('Consultar', 155, y + 4)
+      }
+      y += 9
     })
 
-    y += 5
-    doc.setFontSize(8)
-    doc.setTextColor(150, 150, 150)
-    doc.text(`Generado: ${new Date().toLocaleDateString('es-PY')} · ${filtered.length} productos`, 105, y, { align: 'center' })
+    // Línea dorada y footer
+    doc.setDrawColor(154, 123, 63)
+    doc.setLineWidth(0.5)
+    doc.line(14, y + 4, 196, y + 4)
+    doc.setFontSize(7.5)
+    doc.setTextColor(154, 123, 63)
+    doc.text(`${filtered.length} producto${filtered.length !== 1 ? 's' : ''} · Generado ${new Date().toLocaleDateString('es-PY')}`, 105, y + 10, { align: 'center' })
 
-    doc.save(`catalogo-joda-parfums-${new Date().toISOString().split('T')[0]}.pdf`)
+    doc.save(`catalogo-${businessName.toLowerCase().replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}.pdf`)
   }
 
   return (
@@ -120,7 +178,7 @@ export function Catalogo() {
           {[{ value: 'all', label: 'Todos' }, { value: 'sealed', label: 'Sellados' }, { value: 'decant', label: 'Decants' }].map(opt => (
             <button
               key={opt.value}
-              onClick={() => setFilterType(opt.value as any)}
+              onClick={() => setFilterType(opt.value as 'all' | 'sealed' | 'decant')}
               className={`px-3 py-1 rounded-md text-sm cursor-pointer transition-colors ${filterType === opt.value ? 'bg-white text-violet-700 shadow-sm font-medium' : 'text-gray-600 hover:text-gray-900'}`}
             >
               {opt.label}
@@ -154,21 +212,23 @@ export function Catalogo() {
       <p className="text-sm text-gray-500 mb-4">{filtered.length} producto{filtered.length !== 1 ? 's' : ''} disponible{filtered.length !== 1 ? 's' : ''}</p>
 
       {/* Grid de productos */}
-      <div ref={catalogRef} className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         {filtered.map(p => {
           const batches = decantBatches.filter(b => b.productId === p.id)
           const availableSizes = [...new Set(batches.map(b => b.sizeML))].sort((a, b) => a - b)
           return (
             <div key={p.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition-shadow">
-              <div className="aspect-square bg-gradient-to-br from-violet-50 to-purple-100 flex items-center justify-center">
-                {p.imageUrl ? (
-                  <img src={p.imageUrl} alt={p.name} className="w-full h-full object-cover" />
+              <div className="aspect-square bg-gradient-to-br from-amber-50 to-stone-100 overflow-hidden">
+                {p.imageIds?.[0] ? (
+                  <CatalogThumb imageId={p.imageIds[0]} />
                 ) : (
-                  <span className="text-5xl">🌸</span>
+                  <div className="w-full h-full flex items-center justify-center">
+                    <span className="text-5xl select-none">🌸</span>
+                  </div>
                 )}
               </div>
               <div className="p-3">
-                <Badge color={p.type === 'sealed' ? 'blue' : 'violet'} >
+                <Badge color={p.type === 'sealed' ? 'blue' : 'violet'}>
                   {p.type === 'sealed' ? 'Sellado' : 'Decants'}
                 </Badge>
                 <p className="font-semibold text-gray-900 mt-2 text-sm leading-tight">{p.name}</p>

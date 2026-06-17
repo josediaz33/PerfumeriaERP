@@ -3,6 +3,7 @@ import type {
   Account,
   Movement,
   Product,
+  ProductImage,
   StockEntry,
   ShipmentBatch,
   Supply,
@@ -39,6 +40,7 @@ export class JodaDB extends Dexie {
   utilityDistributions!: Table<UtilityDistribution>
   config!: Table<AppConfig>
   exchangeRates!: Table<ExchangeRate>
+  images!: Table<ProductImage>
 
   constructor() {
     super('JodaParfumsDB')
@@ -120,6 +122,28 @@ export class JodaDB extends Dexie {
       utilityDistributions: '++id, startDate, endDate',
       config: '++id, key',
       exchangeRates: '++id, date',
+    })
+    // v5 — BRAND: tabla de imágenes (id string UUID, no autoincremental)
+    this.version(5).stores({
+      accounts: '++id, type, isActive',
+      movements: '++id, type, category, accountId, toAccountId, date, referenceId',
+      products: '++id, brand, olfactiveFamily, type, createdAt',
+      stockEntries: '++id, productId, supplierId, shipmentBatchId, orderId, date',
+      shipmentBatches: '++id, supplierId, date',
+      supplies: '++id, type, sizeML',
+      decantBatches: '++id, productId, date, sourceId',
+      sales: '++id, date, accountId, customerId, referenceId',
+      saleItems: '++id, saleId, productId, type',
+      customers: '++id, name',
+      suppliers: '++id, name, country',
+      supplierPrices: '++id, supplierId, brand',
+      orders: '++id, supplierId, status, orderDate',
+      localOrders: '++id, customerId, status, orderDate',
+      budgets: '++id, customerId, status, createdAt',
+      utilityDistributions: '++id, startDate, endDate',
+      config: '++id, key',
+      exchangeRates: '++id, date',
+      images: 'id, mime, createdAt',
     })
   }
 }

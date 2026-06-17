@@ -1,9 +1,23 @@
-import { useState, Fragment } from 'react'
+import { useState, Fragment, useRef, useEffect } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { Plus, Package, Search, AlertTriangle, Edit2, Trash2, Info, ChevronDown, ChevronRight, Truck, X, Droplets } from 'lucide-react'
+import { Plus, Package, Search, AlertTriangle, Edit2, Trash2, Info, ChevronDown, ChevronRight, Truck, X, Droplets, ImageIcon, Upload } from 'lucide-react'
 import { db } from '../db/db'
 import type { Concentration, OlfactiveFamily, Product, ProductType, StockEntry } from '../db/types'
 import { fmtPYG, fmtUSD, fmtDate, today, nowISO } from '../lib/format'
+import { compressImage, createObjectURL } from '../lib/images'
+
+function ProductThumb({ imageId }: { imageId: string }) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    let objectUrl: string | null = null
+    db.images.get(imageId).then(img => {
+      if (img) { objectUrl = URL.createObjectURL(img.blob); setUrl(objectUrl) }
+    })
+    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl) }
+  }, [imageId])
+  if (!url) return <div className="w-9 h-9 rounded-lg bg-gray-100 shrink-0" />
+  return <img src={url} alt="" className="w-9 h-9 object-cover rounded-lg border border-gray-100 shrink-0" />
+}
 import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
 import { Card, CardBody } from '../components/ui/Card'
@@ -26,6 +40,7 @@ const emptyDefForm = {
   type: 'sealed' as ProductType, sellingPricePYG: '', minStock: '1', notes: '',
   costPYG: '0', stockSealed: '0', stockOpenML: '0',
   price3ML: '', price5ML: '', price10ML: '', price30ML: '',
+  catalogVisible: true,
 }
 
 interface BatchFormItem {
@@ -57,6 +72,9 @@ export function Inventario() {
   const [showForm, setShowForm] = useState(false)
   const [editId, setEditId] = useState<number | null>(null)
   const [form, setForm] = useState(emptyDefForm)
+  const [editImages, setEditImages] = useState<{ id: string; url: string }[]>([])
+  const [imageUploading, setImageUploading] = useState(false)
+  const imageUrlsRef = useRef<string[]>([])
 
   const [showStock, setShowStock] = useState(false)
   const [stockForm, setStockForm] = useState(emptyStockForm)
@@ -92,19 +110,30 @@ export function Inventario() {
     setExpandedProductId(prev => prev === id ? null : id)
   }
 
+  function closeForm() {
+    imageUrlsRef.current.forEach(u => URL.revokeObjectURL(u))
+    imageUrlsRef.current = []
+    setEditImages([])
+    setShowForm(false)
+  }
+
   function openNew() {
     setEditId(null)
     setForm(emptyDefForm)
+    imageUrlsRef.current.forEach(u => URL.revokeObjectURL(u))
+    imageUrlsRef.current = []
+    setEditImages([])
     setShowForm(true)
   }
 
-  function openEdit(p: typeof products[0]) {
+  async function openEdit(p: typeof products[0]) {
     setEditId(p.id!)
     setForm({
       name: p.name, brand: p.brand, olfactiveFamily: p.olfactiveFamily,
       concentration: p.concentration, sizeML: String(p.sizeML),
       type: p.type, sellingPricePYG: String(p.sellingPricePYG),
       minStock: String(p.minStock), notes: p.notes ?? '',
+      catalogVisible: p.catalogVisible !== false,
       costPYG: String(Math.round(p.costPYG)),
       stockSealed: String(p.stockSealed),
       stockOpenML: String(p.stockOpenML),
@@ -113,7 +142,58 @@ export function Inventario() {
       price10ML: p.price10ML ? String(p.price10ML) : '',
       price30ML: p.price30ML ? String(p.price30ML) : '',
     })
+    // Cargar imágenes existentes
+    imageUrlsRef.current.forEach(u => URL.revokeObjectURL(u))
+    imageUrlsRef.current = []
+    const ids = p.imageIds ?? []
+    const imgs = await Promise.all(ids.map(id => db.images.get(id)))
+    const loaded = imgs.flatMap(img => {
+      if (!img) return []
+      const url = createObjectURL(img.blob)
+      imageUrlsRef.current.push(url)
+      return [{ id: img.id, url }]
+    })
+    setEditImages(loaded)
     setShowForm(true)
+  }
+
+  async function handleProductImageUpload(e: React.ChangeEvent<HTMLInputElement>, productId: number) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImageUploading(true)
+    try {
+      const { blob, mime } = await compressImage(file, 800)
+      const id = crypto.randomUUID()
+      const now = nowISO()
+      await db.images.add({ id, blob, mime, createdAt: now })
+      const product = await db.products.get(productId)
+      const newIds = [...(product?.imageIds ?? []), id]
+      await db.products.update(productId, { imageIds: newIds, updatedAt: now })
+      const url = createObjectURL(blob)
+      imageUrlsRef.current.push(url)
+      setEditImages(prev => [...prev, { id, url }])
+    } finally {
+      setImageUploading(false)
+      e.target.value = ''
+    }
+  }
+
+  async function handleProductImageDelete(imageId: string, productId: number) {
+    const now = nowISO()
+    await db.images.delete(imageId)
+    const product = await db.products.get(productId)
+    await db.products.update(productId, {
+      imageIds: (product?.imageIds ?? []).filter(id => id !== imageId),
+      updatedAt: now,
+    })
+    setEditImages(prev => {
+      const removed = prev.find(i => i.id === imageId)
+      if (removed) {
+        URL.revokeObjectURL(removed.url)
+        imageUrlsRef.current = imageUrlsRef.current.filter(u => u !== removed.url)
+      }
+      return prev.filter(i => i.id !== imageId)
+    })
   }
 
   function openIngresar(productId?: number) {
@@ -185,7 +265,7 @@ export function Inventario() {
         createdAt: now, updatedAt: now, ...decantPrices,
       })
     }
-    setShowForm(false)
+    closeForm()
   }
 
   async function handleOpenForDecants(p: Product) {
@@ -687,6 +767,13 @@ export function Inventario() {
                             >
                               {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                             </button>
+                            {p.imageIds?.[0] ? (
+                              <ProductThumb imageId={p.imageIds[0]} />
+                            ) : (
+                              <div className="w-9 h-9 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
+                                <Package size={14} className="text-gray-300" />
+                              </div>
+                            )}
                             <div>
                               <p className="font-medium text-gray-900">{p.name}</p>
                               <p className="text-xs text-gray-500">{p.brand} · {p.concentration} · {p.sizeML}ml</p>
@@ -901,7 +988,7 @@ export function Inventario() {
       </Card>
 
       {/* ── Modal Nuevo / Editar Producto ── */}
-      <Modal isOpen={showForm} onClose={() => setShowForm(false)} title={editId ? 'Editar producto' : 'Nuevo producto'} size="xl">
+      <Modal isOpen={showForm} onClose={closeForm} title={editId ? 'Editar producto' : 'Nuevo producto'} size="xl">
         <div className="grid grid-cols-2 gap-4">
           <Input label="Nombre" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Ej: Baccarat Rouge 540" />
           <Input label="Marca" value={form.brand} onChange={e => setForm(f => ({ ...f, brand: e.target.value }))} placeholder="Ej: Maison Francis Kurkdjian" />
@@ -926,7 +1013,51 @@ export function Inventario() {
             <Textarea label="Notas olfativas" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2} placeholder="Familia, notas de salida / corazón / fondo..." />
           </div>
 
-          {!editId && (
+          {/* Visibilidad en catálogo */}
+          <div className="col-span-2">
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <div className={`relative w-9 h-5 rounded-full transition-colors ${form.catalogVisible ? 'bg-violet-600' : 'bg-gray-200'}`}>
+                <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${form.catalogVisible ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                <input
+                  type="checkbox"
+                  className="sr-only"
+                  checked={form.catalogVisible}
+                  onChange={e => setForm(f => ({ ...f, catalogVisible: e.target.checked }))}
+                />
+              </div>
+              <span className="text-sm text-gray-700">Visible en catálogo</span>
+              {!form.catalogVisible && <span className="text-xs text-gray-400">(no aparece en el catálogo)</span>}
+            </label>
+          </div>
+
+          {/* Fotos del producto — solo en modo edición */}
+          {editId ? (
+            <div className="col-span-2 border-t border-gray-100 pt-4 space-y-3">
+              <p className="text-xs font-medium text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
+                <ImageIcon size={12} /> Fotos del producto
+              </p>
+              {editImages.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {editImages.map(img => (
+                    <div key={img.id} className="relative group">
+                      <img src={img.url} alt="" className="w-20 h-20 object-cover rounded-lg border border-gray-200" />
+                      <button
+                        onClick={() => handleProductImageDelete(img.id, editId)}
+                        className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-white border border-gray-200 rounded-full shadow-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-50"
+                      >
+                        <X size={11} className="text-gray-400 hover:text-red-500" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <label className="flex items-center gap-2 px-3 py-2 border border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition-colors text-sm text-gray-500 hover:text-violet-600 w-fit">
+                <Upload size={13} />
+                {imageUploading ? 'Procesando...' : 'Agregar foto'}
+                <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={e => handleProductImageUpload(e, editId)} disabled={imageUploading} />
+              </label>
+            </div>
+          ) : (
             <div className="col-span-2 flex items-start gap-2 bg-blue-50 border border-blue-100 rounded-lg p-3">
               <Info size={15} className="text-blue-500 shrink-0 mt-0.5" />
               <p className="text-xs text-blue-700">
@@ -971,7 +1102,7 @@ export function Inventario() {
           )}
         </div>
         <div className="flex gap-2 mt-6">
-          <Button variant="secondary" className="flex-1" onClick={() => setShowForm(false)}>Cancelar</Button>
+          <Button variant="secondary" className="flex-1" onClick={closeForm}>Cancelar</Button>
           <Button className="flex-1" onClick={handleSave}>{editId ? 'Guardar cambios' : 'Crear producto'}</Button>
         </div>
       </Modal>

@@ -1,10 +1,13 @@
-import { useState, useEffect } from 'react'
-import { Settings, Save, Download, Upload, RefreshCw } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Settings, Save, Download, Upload, RefreshCw, ImageIcon, X } from 'lucide-react'
 import { db, getConfig, setConfig } from '../db/db'
+import { compressImage, blobToBase64, base64ToBlob, createObjectURL } from '../lib/images'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
 import { Card, CardBody, CardHeader } from '../components/ui/Card'
 import { Input } from '../components/ui/Input'
+
+const LOGO_IMAGE_ID = 'business-logo'
 
 export function Configuracion() {
   const [businessName, setBusinessName] = useState('')
@@ -13,14 +16,25 @@ export function Configuracion() {
   const [usdRate, setUsdRate] = useState('7500')
   const [saved, setSaved] = useState(false)
 
+  const [logoUrl, setLogoUrl] = useState<string | null>(null)
+  const [logoUploading, setLogoUploading] = useState(false)
+  const logoRef = useRef<string | null>(null)
+
   useEffect(() => {
     async function load() {
       setBusinessName(await getConfig('business_name'))
       setBusinessPhone(await getConfig('business_phone'))
       setBusinessAddress(await getConfig('business_address'))
       setUsdRate(await getConfig('usd_pyg_rate'))
+      const img = await db.images.get(LOGO_IMAGE_ID)
+      if (img) {
+        const url = createObjectURL(img.blob)
+        logoRef.current = url
+        setLogoUrl(url)
+      }
     }
     load()
+    return () => { if (logoRef.current) URL.revokeObjectURL(logoRef.current) }
   }, [])
 
   async function handleSave() {
@@ -30,6 +44,30 @@ export function Configuracion() {
     await setConfig('usd_pyg_rate', usdRate)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
+  }
+
+  async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setLogoUploading(true)
+    try {
+      const { blob, mime } = await compressImage(file, 400)
+      await db.images.put({ id: LOGO_IMAGE_ID, blob, mime, createdAt: new Date().toISOString() })
+      if (logoRef.current) URL.revokeObjectURL(logoRef.current)
+      const url = createObjectURL(blob)
+      logoRef.current = url
+      setLogoUrl(url)
+    } finally {
+      setLogoUploading(false)
+      e.target.value = ''
+    }
+  }
+
+  async function handleLogoRemove() {
+    await db.images.delete(LOGO_IMAGE_ID)
+    if (logoRef.current) URL.revokeObjectURL(logoRef.current)
+    logoRef.current = null
+    setLogoUrl(null)
   }
 
   async function fetchExchangeRate() {
@@ -47,12 +85,23 @@ export function Configuracion() {
   }
 
   async function exportData() {
+    const allImages = await db.images.toArray()
+    const imagesB64 = await Promise.all(
+      allImages.map(async img => ({
+        id: img.id,
+        mime: img.mime,
+        createdAt: img.createdAt,
+        data: await blobToBase64(img.blob),
+      }))
+    )
     const data = {
       exportedAt: new Date().toISOString(),
+      version: 2,
       accounts: await db.accounts.toArray(),
       movements: await db.movements.toArray(),
       products: await db.products.toArray(),
       stockEntries: await db.stockEntries.toArray(),
+      shipmentBatches: await db.shipmentBatches.toArray(),
       supplies: await db.supplies.toArray(),
       decantBatches: await db.decantBatches.toArray(),
       sales: await db.sales.toArray(),
@@ -65,8 +114,9 @@ export function Configuracion() {
       budgets: await db.budgets.toArray(),
       utilityDistributions: await db.utilityDistributions.toArray(),
       config: await db.config.toArray(),
+      images: imagesB64,
     }
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -86,6 +136,7 @@ export function Configuracion() {
     if (data.movements) { await db.movements.clear(); await db.movements.bulkAdd(data.movements) }
     if (data.products) { await db.products.clear(); await db.products.bulkAdd(data.products) }
     if (data.stockEntries) { await db.stockEntries.clear(); await db.stockEntries.bulkAdd(data.stockEntries) }
+    if (data.shipmentBatches) { await db.shipmentBatches.clear(); await db.shipmentBatches.bulkAdd(data.shipmentBatches) }
     if (data.supplies) { await db.supplies.clear(); await db.supplies.bulkAdd(data.supplies) }
     if (data.decantBatches) { await db.decantBatches.clear(); await db.decantBatches.bulkAdd(data.decantBatches) }
     if (data.sales) { await db.sales.clear(); await db.sales.bulkAdd(data.sales) }
@@ -98,6 +149,17 @@ export function Configuracion() {
     if (data.budgets) { await db.budgets.clear(); await db.budgets.bulkAdd(data.budgets) }
     if (data.utilityDistributions) { await db.utilityDistributions.clear(); await db.utilityDistributions.bulkAdd(data.utilityDistributions) }
     if (data.config) { await db.config.clear(); await db.config.bulkAdd(data.config) }
+    if (data.images?.length) {
+      await db.images.clear()
+      await db.images.bulkAdd(
+        data.images.map((img: { id: string; mime: 'image/jpeg' | 'image/png'; createdAt: string; data: string }) => ({
+          id: img.id,
+          blob: base64ToBlob(img.data),
+          mime: img.mime,
+          createdAt: img.createdAt,
+        }))
+      )
+    }
     alert('Backup importado correctamente. Recarga la página.')
   }
 
@@ -121,6 +183,41 @@ export function Configuracion() {
             <Button className="w-full" icon={<Save size={15} />} onClick={handleSave}>
               {saved ? '¡Guardado!' : 'Guardar cambios'}
             </Button>
+          </CardBody>
+        </Card>
+
+        {/* Logo del negocio */}
+        <Card>
+          <CardHeader>
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+              <ImageIcon size={16} className="text-violet-600" />
+              Logo del negocio
+            </h3>
+          </CardHeader>
+          <CardBody className="space-y-4">
+            <p className="text-sm text-gray-500">
+              Aparece en los presupuestos PDF y el catálogo exportado. Se guarda localmente.
+            </p>
+            {logoUrl ? (
+              <div className="relative flex items-center justify-center bg-gray-50 rounded-xl border border-gray-200 p-4">
+                <img src={logoUrl} alt="Logo" className="max-h-32 max-w-full object-contain" />
+                <button
+                  onClick={handleLogoRemove}
+                  className="absolute top-2 right-2 p-1 bg-white border border-gray-200 rounded-full shadow-sm hover:bg-red-50 hover:border-red-200 transition-colors"
+                >
+                  <X size={13} className="text-gray-400 hover:text-red-500" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center bg-gray-50 rounded-xl border-2 border-dashed border-gray-200 h-32">
+                <p className="text-sm text-gray-400">Sin logo cargado</p>
+              </div>
+            )}
+            <label className="w-full flex items-center justify-center gap-2 px-4 py-2 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition-colors text-sm text-gray-500 hover:text-violet-600">
+              <Upload size={15} />
+              {logoUploading ? 'Procesando...' : logoUrl ? 'Cambiar logo' : 'Subir logo (PNG / JPG)'}
+              <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleLogoUpload} disabled={logoUploading} />
+            </label>
           </CardBody>
         </Card>
 
@@ -158,11 +255,10 @@ export function Configuracion() {
           </CardHeader>
           <CardBody className="space-y-4">
             <p className="text-sm text-gray-500">
-              Exporta todos tus datos a un archivo JSON para guardar un respaldo manual.
-              Podés importarlo en cualquier momento para restaurar el sistema.
+              Exporta todos tus datos (incluyendo imágenes) a un archivo JSON. Importalo en cualquier momento para restaurar el sistema.
             </p>
             <Button className="w-full" variant="secondary" icon={<Download size={15} />} onClick={exportData}>
-              Exportar backup JSON
+              Exportar backup completo
             </Button>
             <div>
               <p className="text-sm font-medium text-gray-700 mb-1">Importar backup</p>
@@ -183,7 +279,11 @@ export function Configuracion() {
           <CardBody className="space-y-2 text-sm">
             <div className="flex justify-between py-1.5 border-b border-gray-50">
               <span className="text-gray-500">Versión</span>
-              <span className="font-medium text-gray-900">1.0 — Fase 1 MVP</span>
+              <span className="font-medium text-gray-900">2.0 — Fase 2</span>
+            </div>
+            <div className="flex justify-between py-1.5 border-b border-gray-50">
+              <span className="text-gray-500">Schema DB</span>
+              <span className="font-medium text-gray-900">v5</span>
             </div>
             <div className="flex justify-between py-1.5 border-b border-gray-50">
               <span className="text-gray-500">Almacenamiento</span>
@@ -195,7 +295,7 @@ export function Configuracion() {
             </div>
             <div className="flex justify-between py-1.5">
               <span className="text-gray-500">Módulos activos</span>
-              <span className="font-medium text-gray-900">10 módulos</span>
+              <span className="font-medium text-gray-900">13 módulos</span>
             </div>
           </CardBody>
         </Card>

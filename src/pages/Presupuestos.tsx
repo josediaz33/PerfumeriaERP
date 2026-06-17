@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { Plus, FileText, Download, X, Edit2, Trash2, Package } from 'lucide-react'
 import { db } from '../db/db'
+import { blobToBase64 } from '../lib/images'
 import type { BudgetStatus } from '../db/types'
 import { fmtPYG, fmtDate, today, nowISO } from '../lib/format'
 import { upsertCustomer } from '../lib/customers'
@@ -287,19 +288,33 @@ export function Presupuestos() {
     const { default: jsPDF } = await import('jspdf')
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
 
+    // Cargar logo si existe
+    const logoImg = await db.images.get('business-logo')
+    const logoB64 = logoImg ? await blobToBase64(logoImg.blob) : null
+    const logoFmt = logoImg?.mime === 'image/png' ? 'PNG' : 'JPEG'
+
     // Header — JODA brand: dark + gold
     doc.setFillColor(20, 18, 18)
     doc.rect(0, 0, 210, 38, 'F')
-    doc.setTextColor(200, 169, 110)
-    doc.setFontSize(24)
-    doc.setFont('helvetica', 'bold')
-    doc.text('JODA', 14, 16)
-    doc.setFontSize(9)
-    doc.setFont('helvetica', 'normal')
-    doc.setTextColor(180, 150, 95)
-    doc.text('PARFUMS & DECANTS', 14, 23)
-    doc.setTextColor(160, 130, 80)
-    doc.text('Presupuesto de Fragancias', 14, 30)
+    if (logoB64) {
+      doc.addImage(logoB64, logoFmt, 10, 4, 30, 30)
+      doc.setTextColor(200, 169, 110)
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'normal')
+      doc.setTextColor(160, 130, 80)
+      doc.text('Presupuesto de Fragancias', 44, 30)
+    } else {
+      doc.setTextColor(200, 169, 110)
+      doc.setFontSize(24)
+      doc.setFont('helvetica', 'bold')
+      doc.text('JODA', 14, 16)
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'normal')
+      doc.setTextColor(180, 150, 95)
+      doc.text('PARFUMS & DECANTS', 14, 23)
+      doc.setTextColor(160, 130, 80)
+      doc.text('Presupuesto de Fragancias', 14, 30)
+    }
     doc.setTextColor(200, 169, 110)
     doc.setFontSize(10)
     doc.text(`N° ${String(budget.id).padStart(4, '0')}`, 160, 15)
