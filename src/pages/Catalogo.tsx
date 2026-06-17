@@ -148,7 +148,8 @@ export function Catalogo() {
     doc.setTextColor(154, 123, 63)
     doc.text(`${filtered.length} producto${filtered.length !== 1 ? 's' : ''} · Generado ${new Date().toLocaleDateString('es-PY')}`, 105, y + 10, { align: 'center' })
 
-    doc.save(`catalogo-${businessName.toLowerCase().replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}.pdf`)
+    const url = doc.output('bloburi')
+    window.open(url, '_blank')
   }
 
   return (

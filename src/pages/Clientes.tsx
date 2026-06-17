@@ -163,7 +163,8 @@ export function Clientes() {
     doc.setTextColor(78, 75, 92)
     doc.text('JODA Parfums · Paraguay', cx, footerY + 9.5)
 
-    doc.save(`etiqueta-${c.name.replace(/\s+/g, '-').toLowerCase()}.pdf`)
+    const url = doc.output('bloburi')
+    window.open(url, '_blank')
   }
 
   return (

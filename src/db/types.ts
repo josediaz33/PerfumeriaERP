@@ -145,7 +145,7 @@ export interface DecantBatch {
   createdAt: string
 }
 
-export type SaleItemType = 'sealed' | 'decant' | 'partial' | 'supply'
+export type SaleItemType = 'sealed' | 'tester' | 'decant' | 'partial' | 'supply'
 
 export interface SaleItem {
   id?: number
@@ -247,6 +247,7 @@ export interface LocalOrderItem {
   sizeML?: number
   quantity: number
   unitPrice: number
+  sobrePedido?: boolean
 }
 
 export interface LocalOrderSupply {
@@ -295,6 +296,9 @@ export interface BudgetItem {
   quantity: number
   unitPrice: number
   subtotal: number
+  descuentoPct?: number
+  sobrePedido?: boolean
+  costoEstimado?: number
 }
 
 export type BudgetStatus = 'draft' | 'sent' | 'accepted' | 'rejected'
@@ -312,6 +316,8 @@ export interface Budget {
   status: BudgetStatus
   validUntil?: string
   localOrderId?: number
+  esMayorista?: boolean
+  descuentoMayoristaBase?: number
   createdAt: string
   updatedAt: string
 }
