@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { Users, Phone, MapPin, ChevronDown, ChevronUp, ShoppingBag, Clock, Edit2, Printer, CreditCard } from 'lucide-react'
 import { db } from '../db/db'
 import type { Sale, LocalOrder, Customer } from '../db/types'
-import { fmtPYG, fmtDate, nowISO } from '../lib/format'
+import { fmtPYG, fmtDate } from '../lib/format'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Card, CardBody } from '../components/ui/Card'
 import { Modal } from '../components/ui/Modal'
@@ -16,7 +16,7 @@ const localOrderStatusLabels: Record<string, string> = {
   delivered: 'Entregado', cancelled: 'Cancelado',
 }
 const paymentLabels: Record<string, string> = {
-  cash: 'Efectivo', transfer: 'Transferencia', card: 'Tarjeta', other: 'Otro',
+  cash: 'Efectivo', transfer: 'Transferencia', card: 'Tarjeta', qr: 'QR', other: 'Otro',
 }
 
 const emptyEditForm = { name: '', ci: '', phone: '', address: '', notes: '' }
@@ -30,7 +30,6 @@ export function Clientes() {
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [editCustomer, setEditCustomer] = useState<Customer | null>(null)
   const [editForm, setEditForm] = useState(emptyEditForm)
-  const [labelCustomer, setLabelCustomer] = useState<Customer | null>(null)
 
   function matchSales(customerId: number, name: string): Sale[] {
     return sales.filter(s =>
@@ -77,89 +76,92 @@ export function Clientes() {
     const { default: jsPDF } = await import('jspdf')
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [148, 105] })
 
-    // Fondo blanco, borde
-    doc.setDrawColor(180, 160, 220)
+    const W = 148, H = 105
+    const pad = 6
+    const innerW = W - pad * 2
+    const cx = pad + 6
+
+    // ── Borde exterior fino ──
+    doc.setDrawColor(212, 210, 218)
+    doc.setLineWidth(0.35)
+    doc.rect(pad, pad, innerW, H - pad * 2)
+
+    // ── Header oscuro ──
+    const headerH = 13
+    doc.setFillColor(10, 10, 13)
+    doc.rect(pad, pad, innerW, headerH, 'F')
+
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(11)
+    doc.setTextColor(200, 166, 96)
+    doc.text('JODA PARFUMS', cx, pad + 8.5)
+
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(6)
+    doc.setTextColor(138, 112, 65)
+    doc.text('Fragancias & Decants · Paraguay', W - pad - 5, pad + 8.5, { align: 'right' })
+
+    // ── Línea dorada bajo header ──
+    doc.setDrawColor(200, 166, 96)
     doc.setLineWidth(0.6)
-    doc.rect(4, 4, 140, 97)
+    doc.line(pad, pad + headerH, W - pad, pad + headerH)
 
-    // Franja superior — JODA brand
-    doc.setFillColor(20, 18, 18)
-    doc.rect(4, 4, 140, 18, 'F')
-    doc.setTextColor(200, 169, 110)
-    doc.setFontSize(13)
+    // ── Label "DESTINATARIO" ──
+    let y = pad + headerH + 8
     doc.setFont('helvetica', 'bold')
-    doc.text('JODA PARFUMS', 8, 14)
-    doc.setFontSize(7)
+    doc.setFontSize(5.5)
+    doc.setTextColor(182, 178, 190)
+    doc.text('DESTINATARIO', cx, y)
+    y += 6.5
+
+    // ── Nombre ──
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(15)
+    doc.setTextColor(12, 10, 18)
+    const nameLines = doc.splitTextToSize(c.name, innerW - 12)
+    doc.text(nameLines, cx, y)
+    y += nameLines.length * 7 + 3
+
+    // ── Datos de contacto ──
     doc.setFont('helvetica', 'normal')
-    doc.setTextColor(160, 130, 80)
-    doc.text('Fragancias & Decants · Paraguay', 8, 19)
-
-    // Etiqueta de sección
-    doc.setFontSize(7)
-    doc.setTextColor(140, 140, 160)
-    doc.setFont('helvetica', 'bold')
-    doc.text('DESTINATARIO', 8, 30)
-    doc.setDrawColor(200, 180, 240)
-    doc.setLineWidth(0.3)
-    doc.line(8, 32, 140, 32)
-
-    // Datos del destinatario
-    const labelX = 8
-    let y = 39
-
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(14)
-    doc.setTextColor(20, 18, 40)
-    doc.text(c.name, labelX, y)
-    y += 8
-
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(9)
-    doc.setTextColor(60, 60, 80)
+    doc.setFontSize(12)
+    doc.setTextColor(68, 65, 82)
 
     if (c.ci) {
-      doc.setFont('helvetica', 'bold')
-      doc.setTextColor(100, 80, 160)
-      doc.text(`CI:`, labelX, y)
-      doc.setFont('helvetica', 'normal')
-      doc.setTextColor(60, 60, 80)
-      doc.text(c.ci, labelX + 10, y)
-      y += 7
+      doc.text(`CI   ${c.ci}`, cx, y)
+      y += 5.5
     }
-
     if (c.phone) {
-      doc.setFont('helvetica', 'bold')
-      doc.setTextColor(100, 80, 160)
-      doc.text(`Tel:`, labelX, y)
-      doc.setFont('helvetica', 'normal')
-      doc.setTextColor(60, 60, 80)
-      doc.text(c.phone, labelX + 12, y)
-      y += 7
+      doc.text(`Tel  ${c.phone}`, cx, y)
+      y += 5.5
     }
-
     if (c.address) {
-      doc.setFont('helvetica', 'bold')
-      doc.setTextColor(100, 80, 160)
-      doc.text(`Dir:`, labelX, y)
-      doc.setFont('helvetica', 'normal')
-      doc.setTextColor(60, 60, 80)
-      const addressLines = doc.splitTextToSize(c.address, 118)
-      doc.text(addressLines, labelX + 12, y)
-      y += addressLines.length * 6
+      const addrLines = doc.splitTextToSize(c.address, innerW - 14)
+      doc.text(addrLines, cx, y)
+      y += addrLines.length * 5.5
+    }
+    if (c.notes) {
+      doc.setFontSize(7.5)
+      doc.setTextColor(140, 136, 155)
+      const noteLines = doc.splitTextToSize(c.notes, innerW - 14)
+      doc.text(noteLines, cx, y + 1)
     }
 
-    // Sección remitente
-    y = Math.max(y + 4, 78)
-    doc.setDrawColor(200, 180, 240)
-    doc.setLineWidth(0.3)
-    doc.line(8, y, 140, y)
-    doc.setFontSize(7)
-    doc.setTextColor(140, 140, 160)
+    // ── Divisor + Remitente ──
+    const footerY = H - pad - 13
+    doc.setDrawColor(215, 212, 222)
+    doc.setLineWidth(0.25)
+    doc.line(pad, footerY, W - pad, footerY)
+
     doc.setFont('helvetica', 'bold')
-    doc.text('REMITENTE', labelX, y + 5)
+    doc.setFontSize(5.5)
+    doc.setTextColor(170, 165, 180)
+    doc.text('REMITENTE', cx, footerY + 5)
+
     doc.setFont('helvetica', 'normal')
-    doc.setTextColor(80, 80, 100)
-    doc.text('JODA Parfums · Paraguay', labelX, y + 11)
+    doc.setFontSize(7)
+    doc.setTextColor(78, 75, 92)
+    doc.text('JODA Parfums · Paraguay', cx, footerY + 9.5)
 
     doc.save(`etiqueta-${c.name.replace(/\s+/g, '-').toLowerCase()}.pdf`)
   }

@@ -152,7 +152,7 @@ export interface SaleItem {
   profit: number
 }
 
-export type PaymentMethod = 'cash' | 'transfer' | 'card' | 'other'
+export type PaymentMethod = 'cash' | 'transfer' | 'card' | 'qr' | 'other'
 
 export interface Sale {
   id?: number
@@ -160,6 +160,7 @@ export interface Sale {
   totalAmount: number
   totalCost: number
   totalProfit: number
+  commission?: number
   paymentMethod: PaymentMethod
   accountId: number
   customerId?: number
@@ -251,6 +252,7 @@ export interface AdvancePayment {
   date: string
   method: PaymentMethod
   accountId: number
+  commission?: number
   notes?: string
 }
 

@@ -25,13 +25,13 @@ Toda la información se almacena localmente en el navegador mediante **IndexedDB
 | **Dashboard** | KPIs del mes: ventas, utilidad, stock crítico, pedidos pendientes |
 | **Inventario** | Productos por tipo (sellado / tester / decant\_source), lotes con CPP ponderado (FIFO), alertas de stock mínimo, apertura de botella para decants |
 | **Decants** | Producción de frascos, control de ML, historial trazable por origen |
-| **Ventas** | Registro de ventas directas con desglose de ganancia por ítem |
-| **Logística** | Pipeline de pedidos locales con validación de stock, señas (pagos anticipados) y entrega con cobro de saldo |
+| **Ventas** | Registro de ventas directas de sellados, decants, parciales e insumos con desglose de ganancia por ítem |
+| **Logística** | Pipeline de pedidos locales con validación de stock, señas/pagos anticipados, comisiones tarjeta/QR y entrega con cobro de saldo o vuelto digital |
 | **Contabilidad** | Movimientos contables con filtros por mes, tipo y cuenta |
 | **Cuentas** | Saldos en tiempo real, historial por cuenta y recálculo desde movimientos |
 | **Proveedores** | Órdenes de compra internacionales con recepción, distribución de flete y edición en cascada |
 | **Presupuestos** | Presupuestos PDF por cliente con análisis de rentabilidad interno y conversión a pedido de logística |
-| **Clientes** | Directorio de clientes con historial de compras |
+| **Clientes** | Directorio de clientes con historial de compras y generación de etiquetas de envío |
 | **Utilidades** | Análisis de rentabilidad histórica y distribución de ganancias |
 | **Catálogo** | Vista de productos con precios por tamaño |
 | **Configuración** | Parámetros del negocio, tipo de cambio USD/PYG |
@@ -124,8 +124,17 @@ Al preparar un pedido o vender, `quantityRemaining` de cada `StockEntry` se decr
 ### Cascade de costos al editar lotes
 Editar el costo de un lote calcula `costDelta = nuevoTotal - anteriorTotal` y lo propaga al `Movement` contable vinculado y al saldo de la `Account` correspondiente.
 
-### Señas (pagos anticipados en pedidos)
-Cada seña genera un `Movement` de ingreso inmediato. Al entregar, se cobra solo `max(0, totalAmount - señaTotal)`. Si el saldo es 0, la entrega se confirma sin requerir cuenta de cobro.
+### Señas / pagos anticipados en pedidos
+Cada pago anticipado genera un `Movement` de ingreso inmediato. Al entregar, se cobra solo `max(0, totalAmount - señaTotal)`. Si el saldo es 0, la entrega se confirma sin requerir cuenta de cobro.
+
+### Comisiones tarjeta / QR
+Al cobrar una seña o el saldo de entrega con método `card` o `qr`, se aplica **3% + IVA 10% = 3,3%** sobre el monto cobrado. Se generan dos movimientos: ingreso bruto en la cuenta elegida y gasto de comisión (`category: 'services'`) en la misma cuenta. La comisión se descuenta de la utilidad final del pedido (`totalProfit`).
+
+### Vuelto digital en cobro en efectivo
+Al entregar con método `cash`, se puede activar "Recibí efectivo y transferí el vuelto". Se ingresa el efectivo recibido, el vuelto se calcula automáticamente (`cashReceived − saldo`) y se elige una cuenta de origen (billetera digital). Genera: ingreso del efectivo bruto en la cuenta de cobro y gasto del vuelto en la cuenta seleccionada.
+
+### Pre-creación de productos al hacer pedido a proveedor
+Al crear un pedido a proveedor, los productos que aún no existen en inventario se crean automáticamente con `stockSealed: 0`. Esto permite armar pedidos de Logística con esos productos antes de recepcionar el pedido. El stock real se agrega al recepcionar normalmente.
 
 ### Insumos en pedidos con decants
 Al pasar un pedido a "Preparar", `advanceStatus` descuenta automáticamente el frasco correspondiente por cada ítem de tipo `decant` (búsqueda por `sizeML`). Por eso el array `supplies[]` del `LocalOrder` es para insumos adicionales (etiquetas, packaging, etc.) y **no** debe incluir los frascos de decant para evitar doble descuento.
@@ -150,6 +159,7 @@ Al pasar un pedido a "Preparar", `advanceStatus` descuenta automáticamente el f
 - Recepción de pedidos: genera `StockEntry` por producto, distribuye el flete proporcionalmente, recalcula CPP
 - **Edición de pedidos recibidos**: modal con cambio de cotización, flete y precios por ítem; cascade completo a stock entries, CPP de productos, movimiento y saldo
 - **Pago anticipado**: al crear un pedido o desde la tabla de pedidos activos, se puede registrar el pago del total de productos antes de recepcionar. Al recepcionar un pedido prepagado, solo se descuenta el envío
+- **Pre-creación de productos**: al crear un pedido, los productos nuevos se crean en inventario con `stockSealed: 0` para poder usarlos en Logística antes de recepcionar
 
 ### Presupuestos
 - **Tipos de línea**: Sellado, Tester, Decant (tamaños 3/5/10/30ml), Parcial, Personalizado
@@ -162,11 +172,12 @@ Al pasar un pedido a "Preparar", `advanceStatus` descuenta automáticamente el f
 - **Conversión a pedido**: presupuesto aceptado → un click → `LocalOrder` en Logística con ítems y estado Pendiente; frascos para decants se descontarán al preparar (no se pre-cargan en `supplies[]`)
 
 ### Logística
-- Validación de stock antes de preparar: unidades selladas, ML abiertos y frascos
-- Al preparar: descuenta stock del producto + FIFO sobre lotes + frascos por ítem decant + crea `DecantBatch`
-- Señas con movimiento contable inmediato; saldo calculado al entregar
-- **Reversión a Pendiente**: restaura ML/stock, elimina DecantBatch, repone frascos en insumos
-- **Eliminar venta de logística**: revierte cobro, restaura stock (FIFO + frascos + ML), elimina `DecantBatch` y el pedido asociado
+- Validación de stock antes de preparar: unidades selladas, ML abiertos, frascos e insumos
+- Al preparar: descuenta stock del producto + FIFO sobre lotes + frascos por ítem decant + insumos de venta + crea `DecantBatch`
+- **Pagos anticipados** (señas) con movimiento contable inmediato; saldo calculado al entregar; admiten método tarjeta/QR con comisión automática
+- **Entrega**: fecha editable, métodos efectivo/transferencia/tarjeta/QR/otro; comisión automática en tarjeta y QR; vuelto digital opcional en efectivo
+- **Reversión a Pendiente**: restaura ML/stock, elimina DecantBatch, repone frascos e insumos
+- **Eliminar venta de logística**: revierte cobro, restaura stock (FIFO + frascos + ML + insumos), elimina `DecantBatch` y el pedido asociado
 
 ### Cuentas
 - Historial por cuenta: filtro de mes, resumen ingresos/egresos/saldo del período, tabla de movimientos

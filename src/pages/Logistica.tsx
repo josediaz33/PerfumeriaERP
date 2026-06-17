@@ -46,6 +46,10 @@ export function Logistica() {
   const [pendingDeliveryId, setPendingDeliveryId] = useState<number | null>(null)
   const [payAccountId, setPayAccountId] = useState('')
   const [payMethod, setPayMethod] = useState<PaymentMethod>('cash')
+  const [payDate, setPayDate] = useState(today())
+  const [payChangeEnabled, setPayChangeEnabled] = useState(false)
+  const [payCashReceived, setPayCashReceived] = useState('')
+  const [payChangeAccountId, setPayChangeAccountId] = useState('')
 
   const [editOrderId, setEditOrderId] = useState<number | null>(null)
   const [supplyErrors, setSupplyErrors] = useState<string[]>([])
@@ -216,18 +220,36 @@ export function Logistica() {
     const amount = parseFloat(señaForm.amount)
     if (!amount || amount <= 0) return
     const now = nowISO()
-    const newSeña: AdvancePayment = { amount, date: señaForm.date, method: señaForm.method, accountId: parseInt(señaForm.accountId), notes: señaForm.notes || undefined }
+    const hasComm = señaForm.method === 'card' || señaForm.method === 'qr'
+    const commission = hasComm ? Math.round(amount * 0.033) : 0
+    const newSeña: AdvancePayment = {
+      amount, date: señaForm.date, method: señaForm.method,
+      accountId: parseInt(señaForm.accountId),
+      commission: commission > 0 ? commission : undefined,
+      notes: señaForm.notes || undefined,
+    }
     const updatedSeñas = [...(order.advancePayments ?? []), newSeña]
     await db.transaction('rw', [db.localOrders, db.accounts, db.movements], async () => {
       await db.movements.add({
         type: 'income', category: 'sale',
         amount,
         accountId: parseInt(señaForm.accountId),
-        description: `Seña — ${order.customerName}`,
+        description: `Pago anticipado — ${order.customerName}`,
         referenceId: señaOrderId!, referenceType: 'local_order',
         date: señaForm.date, createdAt: now,
       })
       await db.accounts.where('id').equals(parseInt(señaForm.accountId)).modify(a => { a.balance += amount })
+      if (commission > 0) {
+        await db.movements.add({
+          type: 'expense', category: 'services',
+          amount: commission,
+          accountId: parseInt(señaForm.accountId),
+          description: `Comisión ${señaForm.method === 'qr' ? 'QR' : 'tarjeta'} (3% + IVA) — ${order.customerName}`,
+          referenceId: señaOrderId!, referenceType: 'local_order',
+          date: señaForm.date, createdAt: now,
+        })
+        await db.accounts.where('id').equals(parseInt(señaForm.accountId)).modify(a => { a.balance -= commission })
+      }
       await db.localOrders.update(señaOrderId!, { advancePayments: updatedSeñas, updatedAt: now })
     })
     setShowSeña(false)
@@ -445,6 +467,10 @@ export function Logistica() {
       setPendingDeliveryId(id)
       setPayAccountId('')
       setPayMethod('cash')
+      setPayDate(today())
+      setPayChangeEnabled(false)
+      setPayCashReceived('')
+      setPayChangeAccountId('')
       setShowPaymentModal(true)
     } else {
       await db.localOrders.update(id, { status: next, updatedAt: nowISO() })
@@ -479,10 +505,16 @@ export function Logistica() {
       itemCosts.push(unitCost)
     }
     const totalCost = order.items.reduce((s, item, i) => s + itemCosts[i] * item.quantity, 0)
-    const totalProfit = order.totalAmount - totalCost
 
     const señaTotal = (order.advancePayments ?? []).reduce((s, p) => s + p.amount, 0)
     const saldo = Math.max(0, order.totalAmount - señaTotal)
+
+    // Comisión: 3% + IVA 10% = 3,3% — aplica al saldo cobrado con tarjeta o QR
+    const hasCommission = (payMethod === 'card' || payMethod === 'qr') && saldo > 0
+    const commission = hasCommission ? Math.round(saldo * 0.033) : 0
+    // Sumar comisiones ya pagadas en señas anteriores
+    const señaCommissions = (order.advancePayments ?? []).reduce((s, p) => s + (p.commission ?? 0), 0)
+    const totalProfit = order.totalAmount - totalCost - commission - señaCommissions
 
     await db.transaction('rw', [db.localOrders, db.accounts, db.movements, db.sales, db.saleItems], async () => {
       const saleId = await db.sales.add({
@@ -490,13 +522,14 @@ export function Logistica() {
         totalAmount: order.totalAmount,
         totalCost,
         totalProfit,
+        commission: (commission + señaCommissions) > 0 ? (commission + señaCommissions) : undefined,
         paymentMethod: payMethod,
         accountId: parseInt(payAccountId),
         customerId: order.customerId,
         customerName: order.customerName,
         referenceType: 'local_order',
         referenceId: pendingDeliveryId!,
-        date: today(),
+        date: payDate,
         notes: order.notes,
         createdAt: now,
       })
@@ -516,15 +549,40 @@ export function Logistica() {
         })
       }
       if (saldo > 0) {
+        const cashVuelto = payChangeEnabled && payMethod === 'cash'
+        const cashReceived = cashVuelto ? (parseFloat(payCashReceived) || 0) : saldo
+        const changeAmount = cashVuelto ? Math.max(0, cashReceived - saldo) : 0
         await db.movements.add({
           type: 'income', category: 'sale',
-          amount: saldo,
+          amount: cashReceived,
           accountId: parseInt(payAccountId),
-          description: `Entrega — ${order.customerName}${señaTotal > 0 ? ` (saldo, seña: ${fmtPYG(señaTotal)})` : ''}`,
+          description: `Entrega — ${order.customerName}${señaTotal > 0 ? ` (saldo, seña: ${fmtPYG(señaTotal)})` : ''}${cashVuelto && changeAmount > 0 ? ` (efectivo: ${fmtPYG(cashReceived)})` : ''}`,
           referenceId: pendingDeliveryId!, referenceType: 'local_order',
-          date: today(), createdAt: now,
+          date: payDate, createdAt: now,
         })
-        await db.accounts.where('id').equals(parseInt(payAccountId)).modify(a => { a.balance += saldo })
+        await db.accounts.where('id').equals(parseInt(payAccountId)).modify(a => { a.balance += cashReceived })
+        if (changeAmount > 0 && payChangeAccountId) {
+          await db.movements.add({
+            type: 'expense', category: 'other',
+            amount: changeAmount,
+            accountId: parseInt(payChangeAccountId),
+            description: `Vuelto — ${order.customerName}`,
+            referenceId: pendingDeliveryId!, referenceType: 'local_order',
+            date: payDate, createdAt: now,
+          })
+          await db.accounts.where('id').equals(parseInt(payChangeAccountId)).modify(a => { a.balance -= changeAmount })
+        }
+      }
+      if (commission > 0) {
+        await db.movements.add({
+          type: 'expense', category: 'services',
+          amount: commission,
+          accountId: parseInt(payAccountId),
+          description: `Comisión ${payMethod === 'qr' ? 'QR' : 'tarjeta'} (3% + IVA) — ${order.customerName}`,
+          referenceId: pendingDeliveryId!, referenceType: 'local_order',
+          date: payDate, createdAt: now,
+        })
+        await db.accounts.where('id').equals(parseInt(payAccountId)).modify(a => { a.balance -= commission })
       }
       await db.localOrders.update(pendingDeliveryId!, { status: 'delivered', updatedAt: now })
     })
@@ -798,6 +856,12 @@ export function Logistica() {
                 )}
                 {señaTotal === 0 && <p className="text-xs text-green-600">{ord.items.length} producto(s) · {fmtDate(ord.orderDate)}</p>}
               </div>
+              <Input
+                label="Fecha de entrega"
+                type="date"
+                value={payDate}
+                onChange={e => setPayDate(e.target.value)}
+              />
               {saldo > 0 ? (
                 <>
                   <Select
@@ -809,23 +873,92 @@ export function Logistica() {
                   <Select
                     label="Método de pago"
                     value={payMethod}
-                    onChange={e => setPayMethod(e.target.value as PaymentMethod)}
+                    onChange={e => {
+                      setPayMethod(e.target.value as PaymentMethod)
+                      if (e.target.value !== 'cash') { setPayChangeEnabled(false); setPayCashReceived(''); setPayChangeAccountId('') }
+                    }}
                     options={[
                       { value: 'cash', label: 'Efectivo' },
                       { value: 'transfer', label: 'Transferencia' },
                       { value: 'card', label: 'Tarjeta' },
+                      { value: 'qr', label: 'QR' },
                       { value: 'other', label: 'Otro' },
                     ]}
                   />
+                  {payMethod === 'cash' && (
+                    <div className="space-y-3">
+                      <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={payChangeEnabled}
+                          onChange={e => {
+                            setPayChangeEnabled(e.target.checked)
+                            if (!e.target.checked) { setPayCashReceived(''); setPayChangeAccountId('') }
+                          }}
+                          className="w-4 h-4 rounded border-gray-300 accent-violet-600"
+                        />
+                        <span className="text-sm text-gray-700">Recibí efectivo y transferí el vuelto</span>
+                      </label>
+                      {payChangeEnabled && (
+                        <>
+                          <Input
+                            label="Efectivo recibido"
+                            type="number"
+                            value={payCashReceived}
+                            onChange={e => setPayCashReceived(e.target.value)}
+                            placeholder="Monto que entregó el cliente"
+                          />
+                          {parseFloat(payCashReceived) >= saldo && (
+                            <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-sm">
+                              <div className="flex justify-between text-blue-700 font-medium">
+                                <span>Vuelto a transferir</span>
+                                <span>{fmtPYG(Math.max(0, parseFloat(payCashReceived) - saldo))}</span>
+                              </div>
+                            </div>
+                          )}
+                          {parseFloat(payCashReceived) > saldo && (
+                            <Select
+                              label="Transferir vuelto desde cuenta"
+                              value={payChangeAccountId}
+                              onChange={e => setPayChangeAccountId(e.target.value)}
+                              options={[{ value: '', label: 'Seleccionar cuenta...' }, ...accounts.map(a => ({ value: String(a.id), label: `${a.name} — ${fmtPYG(a.balance)}` }))]}
+                            />
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
                 </>
               ) : (
                 <div className="bg-violet-50 rounded-lg p-3 text-sm text-violet-700 text-center font-medium">
                   Pagado completamente con señas. Solo se registrará la entrega.
                 </div>
               )}
+              {(payMethod === 'card' || payMethod === 'qr') && saldo > 0 && (() => {
+                const comm = Math.round(saldo * 0.033)
+                return (
+                  <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 text-sm space-y-1">
+                    <div className="flex justify-between text-amber-700">
+                      <span>Comisión {payMethod === 'qr' ? 'QR' : 'tarjeta'} (3% + IVA)</span>
+                      <span className="font-semibold">− {fmtPYG(comm)}</span>
+                    </div>
+                    <div className="flex justify-between text-amber-600 text-xs">
+                      <span>Neto que acredita la cuenta</span>
+                      <span>{fmtPYG(saldo - comm)}</span>
+                    </div>
+                  </div>
+                )
+              })()}
               <div className="flex gap-2 pt-2">
                 <Button variant="secondary" className="flex-1" onClick={() => { setShowPaymentModal(false); setPendingDeliveryId(null) }}>Cancelar</Button>
-                <Button className="flex-1" onClick={handleDeliveryPayment} disabled={saldo > 0 && !payAccountId}>
+                <Button className="flex-1" onClick={handleDeliveryPayment} disabled={
+                  (saldo > 0 && !payAccountId) ||
+                  (payMethod === 'cash' && payChangeEnabled && saldo > 0 && (
+                    !payCashReceived ||
+                    parseFloat(payCashReceived) < saldo ||
+                    (parseFloat(payCashReceived) > saldo && !payChangeAccountId)
+                  ))
+                }>
                   Confirmar entrega{saldo > 0 ? ` y cobrar ${fmtPYG(saldo)}` : ''}
                 </Button>
               </div>
@@ -949,7 +1082,7 @@ export function Logistica() {
                   label="Método de pago"
                   value={señaForm.method}
                   onChange={e => setSeñaForm(f => ({ ...f, method: e.target.value as PaymentMethod }))}
-                  options={[{ value: 'cash', label: 'Efectivo' }, { value: 'transfer', label: 'Transferencia' }, { value: 'card', label: 'Tarjeta' }, { value: 'other', label: 'Otro' }]}
+                  options={[{ value: 'cash', label: 'Efectivo' }, { value: 'transfer', label: 'Transferencia' }, { value: 'card', label: 'Tarjeta' }, { value: 'qr', label: 'QR' }, { value: 'other', label: 'Otro' }]}
                 />
                 <Select
                   label="Acreditar en"
@@ -958,12 +1091,27 @@ export function Logistica() {
                   options={[{ value: '', label: 'Seleccionar...' }, ...accounts.map(a => ({ value: String(a.id), label: `${a.name} — ${fmtPYG(a.balance)}` }))]}
                 />
               </div>
+              {(señaForm.method === 'card' || señaForm.method === 'qr') && parseFloat(señaForm.amount) > 0 && (() => {
+                const comm = Math.round(parseFloat(señaForm.amount) * 0.033)
+                return (
+                  <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 text-sm space-y-1">
+                    <div className="flex justify-between text-amber-700">
+                      <span>Comisión {señaForm.method === 'qr' ? 'QR' : 'tarjeta'} (3% + IVA)</span>
+                      <span className="font-semibold">− {fmtPYG(comm)}</span>
+                    </div>
+                    <div className="flex justify-between text-amber-600 text-xs">
+                      <span>Neto que acredita la cuenta</span>
+                      <span>{fmtPYG(parseFloat(señaForm.amount) - comm)}</span>
+                    </div>
+                  </div>
+                )
+              })()}
               <Input label="Fecha" type="date" value={señaForm.date} onChange={e => setSeñaForm(f => ({ ...f, date: e.target.value }))} />
               <Input label="Notas (opcional)" value={señaForm.notes} onChange={e => setSeñaForm(f => ({ ...f, notes: e.target.value }))} />
               <div className="flex gap-2 pt-2">
                 <Button variant="secondary" className="flex-1" onClick={() => { setShowSeña(false); setSeñaOrderId(null) }}>Cancelar</Button>
                 <Button className="flex-1" onClick={handleAddSeña} disabled={!señaForm.amount || !señaForm.accountId || parseFloat(señaForm.amount) <= 0}>
-                  Registrar seña
+                  Registrar pago
                 </Button>
               </div>
             </div>

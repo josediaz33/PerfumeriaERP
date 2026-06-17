@@ -14,11 +14,11 @@ import { CustomerAutocomplete } from '../components/ui/CustomerAutocomplete'
 import { Badge } from '../components/ui/Badge'
 
 const paymentLabels: Record<PaymentMethod, string> = {
-  cash: 'Efectivo', transfer: 'Transferencia', card: 'Tarjeta', other: 'Otro',
+  cash: 'Efectivo', transfer: 'Transferencia', card: 'Tarjeta', qr: 'QR', other: 'Otro',
 }
 
 const paymentColors: Record<PaymentMethod, 'green' | 'blue' | 'violet' | 'gray'> = {
-  cash: 'green', transfer: 'blue', card: 'violet', other: 'gray',
+  cash: 'green', transfer: 'blue', card: 'violet', qr: 'blue', other: 'gray',
 }
 
 interface CartItem {
@@ -740,7 +740,7 @@ export function Ventas() {
               label="Método de pago"
               value={editSaleForm.paymentMethod}
               onChange={e => setEditSaleForm(f => ({ ...f, paymentMethod: e.target.value as PaymentMethod }))}
-              options={[{ value: 'cash', label: 'Efectivo' }, { value: 'transfer', label: 'Transferencia' }, { value: 'card', label: 'Tarjeta' }, { value: 'other', label: 'Otro' }]}
+              options={[{ value: 'cash', label: 'Efectivo' }, { value: 'transfer', label: 'Transferencia' }, { value: 'card', label: 'Tarjeta' }, { value: 'qr', label: 'QR' }, { value: 'other', label: 'Otro' }]}
             />
             <Select
               label="Cuenta"

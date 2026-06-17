@@ -102,8 +102,32 @@ export function Proveedores() {
       prepaidAmount: shouldPay ? totalPYG : undefined,
       createdAt: now,
     }
+    async function preCreateProducts() {
+      for (const item of items) {
+        const exists = products.find(
+          p => p.name.toLowerCase() === item.productName.toLowerCase() &&
+               p.brand.toLowerCase() === item.brand.toLowerCase()
+        )
+        if (!exists) {
+          await db.products.add({
+            name: item.productName, brand: item.brand,
+            olfactiveFamily: 'other', concentration: 'EDP',
+            sizeML: parseFloat(item.sizeML),
+            costUSD: parseFloat(item.unitPriceUSD),
+            exchangeRateUsed: exchangeRate,
+            costPYG: Math.round(parseFloat(item.unitPriceUSD) * exchangeRate),
+            sellingPricePYG: 0,
+            stockSealed: 0, stockOpenML: 0,
+            minStock: 1, type: 'sealed',
+            createdAt: now, updatedAt: now,
+          })
+        }
+      }
+    }
+
     if (shouldPay && accId) {
-      await db.transaction('rw', [db.orders, db.movements, db.accounts], async () => {
+      await db.transaction('rw', [db.orders, db.movements, db.accounts, db.products], async () => {
+        await preCreateProducts()
         const orderId = await db.orders.add(orderData)
         await db.movements.add({
           type: 'expense', category: 'restock', amount: totalPYG, accountId: accId,
@@ -114,7 +138,10 @@ export function Proveedores() {
         await db.accounts.where('id').equals(accId).modify(a => { a.balance -= totalPYG })
       })
     } else {
-      await db.orders.add(orderData)
+      await db.transaction('rw', [db.orders, db.products], async () => {
+        await preCreateProducts()
+        await db.orders.add(orderData)
+      })
     }
     setOForm({
       supplierId: '', exchangeRate: '7500', orderDate: today(), estimatedArrival: '', notes: '',

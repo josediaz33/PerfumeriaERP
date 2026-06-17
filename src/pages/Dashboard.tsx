@@ -2,7 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { ShoppingCart, Package, TrendingUp, AlertTriangle, Clock, DollarSign } from 'lucide-react'
 import { db } from '../db/db'
-import { fmtPYG, today } from '../lib/format'
+import { fmtPYG, fmtDate, today } from '../lib/format'
 import { Card, CardBody, CardHeader } from '../components/ui/Card'
 import { format, subDays } from 'date-fns'
 
@@ -171,7 +171,7 @@ export function Dashboard() {
                 <div key={m.id} className="flex items-center justify-between px-5 py-3 border-b border-gray-50 hover:bg-gray-50 transition-colors">
                   <div className="min-w-0">
                     <p className="text-sm text-gray-900 truncate">{m.description}</p>
-                    <p className="text-xs text-gray-400">{m.date}</p>
+                    <p className="text-xs text-gray-400">{fmtDate(m.date)}</p>
                   </div>
                   <span className={`text-sm font-semibold ml-3 shrink-0 ${m.type === 'income' ? 'text-green-600' : m.type === 'expense' ? 'text-red-600' : 'text-violet-600'}`}>
                     {m.type === 'income' ? '+' : m.type === 'expense' ? '−' : '↔'}{fmtPYG(m.amount)}
