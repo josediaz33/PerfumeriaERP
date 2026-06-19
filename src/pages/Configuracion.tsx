@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Settings, Save, Download, Upload, RefreshCw, ImageIcon, X } from 'lucide-react'
+import { Settings, Save, Download, Upload, RefreshCw, ImageIcon, X, Lock, LockOpen } from 'lucide-react'
 import { db, getConfig, setConfig } from '../db/db'
 import { compressImage, blobToBase64, base64ToBlob, createObjectURL } from '../lib/images'
 import { PageHeader } from '../components/ui/PageHeader'
@@ -15,6 +15,11 @@ export function Configuracion() {
   const [businessAddress, setBusinessAddress] = useState('')
   const [usdRate, setUsdRate] = useState('7500')
   const [saved, setSaved] = useState(false)
+
+  const [currentPin, setCurrentPin] = useState('')
+  const [newPin, setNewPin] = useState('')
+  const [pinSaved, setPinSaved] = useState(false)
+  const [pinError, setPinError] = useState('')
 
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
   const [logoUploading, setLogoUploading] = useState(false)
@@ -82,6 +87,25 @@ export function Configuracion() {
     } catch {
       alert('No se pudo obtener la cotización. Ingresala manualmente.')
     }
+  }
+
+  useEffect(() => {
+    getConfig('pin_code').then(p => setCurrentPin(p || ''))
+  }, [])
+
+  async function handleSavePin() {
+    setPinError('')
+    if (newPin && (newPin.length < 4 || newPin.length > 6 || !/^\d+$/.test(newPin))) {
+      setPinError('El PIN debe tener entre 4 y 6 dígitos numéricos.')
+      return
+    }
+    await setConfig('pin_code', newPin)
+    setCurrentPin(newPin)
+    setNewPin('')
+    setPinSaved(true)
+    if (newPin) sessionStorage.setItem('joda_unlocked', '1')
+    else sessionStorage.removeItem('joda_unlocked')
+    setTimeout(() => setPinSaved(false), 2000)
   }
 
   async function exportData() {
@@ -245,6 +269,49 @@ export function Configuracion() {
                 Guardar
               </Button>
             </div>
+          </CardBody>
+        </Card>
+
+        {/* PIN de acceso */}
+        <Card>
+          <CardHeader>
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+              {currentPin ? <Lock size={16} className="text-violet-600" /> : <LockOpen size={16} className="text-gray-400" />}
+              Protección con PIN
+            </h3>
+          </CardHeader>
+          <CardBody className="space-y-4">
+            <p className="text-sm text-gray-500">
+              Si configurás un PIN, se pedirá al abrir la app. Dejalo vacío para desactivar la protección.
+            </p>
+            {currentPin ? (
+              <div className="flex items-center gap-2 bg-violet-50 rounded-lg px-3 py-2">
+                <Lock size={14} className="text-violet-600" />
+                <span className="text-sm text-violet-700 font-medium">PIN configurado ({currentPin.length} dígitos)</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
+                <LockOpen size={14} className="text-gray-400" />
+                <span className="text-sm text-gray-500">Sin protección activa</span>
+              </div>
+            )}
+            <Input
+              label={currentPin ? 'Nuevo PIN (dejá vacío para quitar protección)' : 'Nuevo PIN (4–6 dígitos)'}
+              type="password"
+              inputMode="numeric"
+              placeholder="ej. 1234"
+              value={newPin}
+              onChange={e => { setNewPin(e.target.value.replace(/\D/g, '').slice(0, 6)); setPinError('') }}
+            />
+            {pinError && <p className="text-sm text-red-500">{pinError}</p>}
+            <Button
+              className="w-full"
+              icon={<Save size={15} />}
+              onClick={handleSavePin}
+              disabled={newPin === currentPin}
+            >
+              {pinSaved ? '¡Guardado!' : currentPin ? (newPin ? 'Actualizar PIN' : 'Quitar protección') : 'Activar PIN'}
+            </Button>
           </CardBody>
         </Card>
 

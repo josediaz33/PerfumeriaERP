@@ -134,6 +134,16 @@ export function Contabilidad() {
       ? '¿Eliminar este movimiento? El saldo de la cuenta y el lote de stock asociado serán revertidos.'
       : '¿Eliminar este movimiento? El saldo de la cuenta se ajustará automáticamente.'
     if (!confirm(confirmMsg)) return
+
+    if (m.type === 'transfer') {
+      await db.transaction('rw', db.movements, db.accounts, async () => {
+        await db.accounts.where('id').equals(m.accountId).modify(a => { a.balance += m.amount })
+        if (m.toAccountId) await db.accounts.where('id').equals(m.toAccountId).modify(a => { a.balance -= m.amount })
+        await db.movements.delete(m.id!)
+      })
+      return
+    }
+
     const delta = m.type === 'income' ? -m.amount : m.amount
 
     if (isRestock && m.referenceId) {
@@ -269,16 +279,16 @@ export function Contabilidad() {
                         {m.type === 'income' ? '+' : m.type === 'expense' ? '−' : '↔'} {fmtPYG(m.amount)}
                       </td>
                       <td className="px-3 py-3">
-                        {m.type !== 'transfer' && (
-                          <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1">
+                          {m.type !== 'transfer' && (
                             <button onClick={() => openEdit(m)} className="p-1.5 rounded-lg text-gray-300 hover:bg-gray-100 hover:text-gray-600 transition-colors cursor-pointer">
                               <Edit2 size={13} />
                             </button>
-                            <button onClick={() => handleDelete(m)} className="p-1.5 rounded-lg text-gray-300 hover:bg-red-50 hover:text-red-500 transition-colors cursor-pointer">
-                              <Trash2 size={13} />
-                            </button>
-                          </div>
-                        )}
+                          )}
+                          <button onClick={() => handleDelete(m)} className="p-1.5 rounded-lg text-gray-300 hover:bg-red-50 hover:text-red-500 transition-colors cursor-pointer">
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   )

@@ -1,7 +1,8 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Layout } from './components/layout/Layout'
-import { seedInitialData } from './db/db'
+import { LockScreen } from './components/layout/LockScreen'
+import { seedInitialData, getConfig } from './db/db'
 
 import { Dashboard } from './pages/Dashboard'
 import { Cuentas } from './pages/Cuentas'
@@ -18,7 +19,30 @@ import { Utilidades } from './pages/Utilidades'
 import { Configuracion } from './pages/Configuracion'
 
 export default function App() {
-  useEffect(() => { seedInitialData() }, [])
+  const [pinState, setPinState] = useState<'loading' | 'locked' | 'unlocked'>('loading')
+  const [storedPin, setStoredPin] = useState('')
+
+  useEffect(() => {
+    seedInitialData()
+    getConfig('pin_code').then(pin => {
+      if (!pin) {
+        setPinState('unlocked')
+      } else if (sessionStorage.getItem('joda_unlocked') === '1') {
+        setPinState('unlocked')
+      } else {
+        setStoredPin(pin)
+        setPinState('locked')
+      }
+    })
+  }, [])
+
+  if (pinState === 'loading') return <div className="fixed inset-0 bg-[#1e1b2e]" />
+  if (pinState === 'locked') return (
+    <LockScreen storedPin={storedPin} onUnlock={() => {
+      sessionStorage.setItem('joda_unlocked', '1')
+      setPinState('unlocked')
+    }} />
+  )
 
   return (
     <BrowserRouter>

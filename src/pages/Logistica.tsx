@@ -50,6 +50,7 @@ export function Logistica() {
   const [payChangeEnabled, setPayChangeEnabled] = useState(false)
   const [payCashReceived, setPayCashReceived] = useState('')
   const [payChangeAccountId, setPayChangeAccountId] = useState('')
+  const [payShippingAccountId, setPayShippingAccountId] = useState('')
 
   const [editOrderId, setEditOrderId] = useState<number | null>(null)
   const [supplyErrors, setSupplyErrors] = useState<string[]>([])
@@ -347,12 +348,18 @@ export function Logistica() {
 
     if (order.status === 'delivered') {
       if (!confirm('¿Anular la entrega? El cobro será revertido y el pedido volverá a estado Listo.\nPara cancelar completamente el pedido, hacelo desde Ventas.')) return
-      const movement = await db.movements.where('referenceId').equals(order.id!).filter(m => m.referenceType === 'local_order').first()
       const linkedSale = await db.sales.where('referenceId').equals(order.id!).first()
+      const allMovs = await db.movements.where('referenceId').equals(order.id!).filter(m => m.referenceType === 'local_order').toArray()
+      // Revertir solo los movimientos de la entrega — las señas quedan como ingreso registrado
+      const deliveryMovs = allMovs.filter(m => !m.description.startsWith('Seña —'))
       await db.transaction('rw', [db.localOrders, db.accounts, db.movements, db.sales, db.saleItems], async () => {
-        if (movement?.id) {
-          await db.accounts.where('id').equals(movement.accountId).modify(a => { a.balance -= movement.amount })
-          await db.movements.delete(movement.id)
+        for (const m of deliveryMovs) {
+          if (m.type === 'income') {
+            await db.accounts.where('id').equals(m.accountId).modify(a => { a.balance -= m.amount })
+          } else {
+            await db.accounts.where('id').equals(m.accountId).modify(a => { a.balance += m.amount })
+          }
+          if (m.id) await db.movements.delete(m.id)
         }
         if (linkedSale?.id) {
           await db.saleItems.where('saleId').equals(linkedSale.id!).delete()
@@ -471,6 +478,7 @@ export function Logistica() {
       setPayChangeEnabled(false)
       setPayCashReceived('')
       setPayChangeAccountId('')
+      setPayShippingAccountId('')
       setShowPaymentModal(true)
     } else {
       await db.localOrders.update(id, { status: next, updatedAt: nowISO() })
@@ -504,7 +512,8 @@ export function Logistica() {
       }
       itemCosts.push(unitCost)
     }
-    const totalCost = order.items.reduce((s, item, i) => s + itemCosts[i] * item.quantity, 0)
+    const shippingExpense = order.shippingPaidBy === 'business' ? order.shippingCost : 0
+    const totalCost = order.items.reduce((s, item, i) => s + itemCosts[i] * item.quantity, 0) + shippingExpense
 
     const señaTotal = (order.advancePayments ?? []).reduce((s, p) => s + p.amount, 0)
     const saldo = Math.max(0, order.totalAmount - señaTotal)
@@ -583,6 +592,18 @@ export function Logistica() {
           date: payDate, createdAt: now,
         })
         await db.accounts.where('id').equals(parseInt(payAccountId)).modify(a => { a.balance -= commission })
+      }
+      const shippingAccId = payShippingAccountId || payAccountId
+      if (shippingExpense > 0 && shippingAccId) {
+        await db.movements.add({
+          type: 'expense', category: 'shipping',
+          amount: shippingExpense,
+          accountId: parseInt(shippingAccId),
+          description: `Envío pagado por empresa — ${order.customerName}`,
+          referenceId: pendingDeliveryId!, referenceType: 'local_order',
+          date: payDate, createdAt: now,
+        })
+        await db.accounts.where('id').equals(parseInt(shippingAccId)).modify(a => { a.balance -= shippingExpense })
       }
       await db.localOrders.update(pendingDeliveryId!, { status: 'delivered', updatedAt: now })
     })
@@ -932,8 +953,18 @@ export function Logistica() {
                   )}
                 </>
               ) : (
-                <div className="bg-violet-50 rounded-lg p-3 text-sm text-violet-700 text-center font-medium">
-                  Pagado completamente con señas. Solo se registrará la entrega.
+                <div className="space-y-3">
+                  <div className="bg-violet-50 rounded-lg p-3 text-sm text-violet-700 text-center font-medium">
+                    Pagado completamente con señas. Solo se registrará la entrega.
+                  </div>
+                  {ord.shippingPaidBy === 'business' && ord.shippingCost > 0 && (
+                    <Select
+                      label={`Cuenta para gasto de envío — ${fmtPYG(ord.shippingCost)}`}
+                      value={payShippingAccountId}
+                      onChange={e => setPayShippingAccountId(e.target.value)}
+                      options={[{ value: '', label: 'Seleccionar cuenta...' }, ...accounts.map(a => ({ value: String(a.id), label: `${a.name} — ${fmtPYG(a.balance)}` }))]}
+                    />
+                  )}
                 </div>
               )}
               {(payMethod === 'card' || payMethod === 'qr') && saldo > 0 && (() => {
@@ -955,6 +986,7 @@ export function Logistica() {
                 <Button variant="secondary" className="flex-1" onClick={() => { setShowPaymentModal(false); setPendingDeliveryId(null) }}>Cancelar</Button>
                 <Button className="flex-1" onClick={handleDeliveryPayment} disabled={
                   (saldo > 0 && !payAccountId) ||
+                  (saldo === 0 && ord.shippingPaidBy === 'business' && ord.shippingCost > 0 && !payShippingAccountId) ||
                   (payMethod === 'cash' && payChangeEnabled && saldo > 0 && (
                     !payCashReceived ||
                     parseFloat(payCashReceived) < saldo ||

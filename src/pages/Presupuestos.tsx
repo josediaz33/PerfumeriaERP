@@ -275,12 +275,13 @@ export function Presupuestos() {
       alert('Este presupuesto solo tiene ítems personalizados sin producto. No se puede convertir a pedido.')
       return
     }
+    const globalDiscFactor = 1 - (budget.discount / 100)
     const orderItems = validItems.map(i => ({
       productId: i.productId || 0,
       type: i.type,
       sizeML: (i.type === 'decant' || i.type === 'partial') ? i.sizeML : undefined,
       quantity: i.quantity,
-      unitPrice: i.unitPrice,
+      unitPrice: Math.round(i.unitPrice * (1 - (i.descuentoPct ?? 0) / 100) * globalDiscFactor),
       sobrePedido: i.sobrePedido || undefined,
     }))
     const skipped = budget.items.length - validItems.length

@@ -157,7 +157,8 @@ export function Ventas() {
     }
 
     const qty = addType === 'partial' ? 1 : (parseInt(addQty) || 1)
-    const existing = cart.findIndex(c => c.productId === productId && c.type === addType && c.sizeML === sizeML)
+    const unitPrice = parseFloat(addPrice) || 0
+    const existing = cart.findIndex(c => c.productId === productId && c.type === addType && c.sizeML === sizeML && c.unitPrice === unitPrice)
     if (existing >= 0 && addType !== 'partial') {
       setCart(c => c.map((item, i) => i === existing ? { ...item, quantity: item.quantity + qty } : item))
     } else {
@@ -165,7 +166,7 @@ export function Ventas() {
         productId, type: addType, sizeML,
         quantity: qty,
         unitCost: Math.round(unitCost),
-        unitPrice: parseFloat(addPrice) || 0,
+        unitPrice: unitPrice,
         label, lotInfo,
       }])
     }
