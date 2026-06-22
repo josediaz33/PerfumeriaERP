@@ -56,6 +56,7 @@ const emptyStockForm = {
   supplierId: '', date: today(),
   registerPayment: false, paymentAccountId: '',
   localCurrency: false,
+  mlMode: false,  // para decant_source: ingresar ML directamente en lugar de botellas
 }
 
 export function Inventario() {
@@ -532,20 +533,30 @@ export function Inventario() {
     if (!product || !stockForm.quantity || !stockForm.costUSD) return
 
     const isDecant = product.type === 'decant_source'
-    const isLocal = stockForm.localCurrency
+    const isMLMode = isDecant && stockForm.mlMode
+    const isLocal = stockForm.localCurrency || isMLMode
     const sizeML = product.sizeML || 1
-    const formQty = parseFloat(stockForm.quantity) // bottles for decant, units for sealed
-    const costInput = parseFloat(stockForm.costUSD) // per bottle/unit (PYG if local, USD if not)
+    const formQty = parseFloat(stockForm.quantity) // ML (mlMode), botellas (decant) o unidades
+    const costInput = parseFloat(stockForm.costUSD) // total Gs. (mlMode) o por botella/unidad
     const exchangeRate = isLocal ? 1 : (parseFloat(stockForm.exchangeRate) || 7500)
     const shippingTotal = parseFloat(stockForm.shippingCostPYG) || 0
 
-    // Convert to stored units (ML for decant, units for sealed)
-    const qty = isDecant ? formQty * sizeML : formQty
-    // For local: costUSD field stores PYG per bottle, so stored costUSD = costPYG/sizeML (rate=1 makes math identical)
-    const costUSD = isDecant ? costInput / sizeML : costInput
-    const shippingPerBottle = formQty > 0 ? shippingTotal / formQty : 0
-    const shippingPerStoredUnit = isDecant ? shippingPerBottle / sizeML : shippingPerBottle
-    const batchCostPYG = costUSD * exchangeRate + shippingPerStoredUnit
+    let qty: number, costUSD: number, batchCostPYG: number
+
+    if (isMLMode) {
+      // ML directo: formQty = ML recibidos, costInput = costo total en Gs.
+      qty = formQty
+      costUSD = 0
+      const shippingPerML = formQty > 0 ? shippingTotal / formQty : 0
+      batchCostPYG = (formQty > 0 ? costInput / formQty : 0) + shippingPerML
+    } else {
+      // Flujo normal: botellas × sizeML para decants, unidades para sellados
+      qty = isDecant ? formQty * sizeML : formQty
+      costUSD = isDecant ? costInput / sizeML : costInput
+      const shippingPerBottle = formQty > 0 ? shippingTotal / formQty : 0
+      const shippingPerStoredUnit = isDecant ? shippingPerBottle / sizeML : shippingPerBottle
+      batchCostPYG = costUSD * exchangeRate + shippingPerStoredUnit
+    }
 
     const existingQty = isDecant ? product.stockOpenML : product.stockSealed
     const newAvgCostPYG = existingQty > 0
@@ -558,7 +569,13 @@ export function Inventario() {
       : null
     const totalPayment = Math.round(qty * batchCostPYG)
     const supplierId = stockForm.supplierId ? parseInt(stockForm.supplierId) : undefined
-    const orderItem = { productName: product.name, brand: product.brand, sizeML: product.sizeML, quantity: Math.round(formQty), unitPriceUSD: costInput }
+    // En mlMode: quantity = ML recibidos, unitPriceUSD = 0 (compra en Gs.)
+    const orderItem = {
+      productName: product.name, brand: product.brand, sizeML: product.sizeML,
+      quantity: Math.round(isMLMode ? qty : formQty),
+      unitPriceUSD: isMLMode ? 0 : costInput,
+    }
+    const orderTotalUSD = isMLMode ? 0 : formQty * costInput
 
     if (payAccount) {
       await db.transaction('rw', [db.products, db.stockEntries, db.movements, db.accounts, db.orders], async () => {
@@ -584,7 +601,7 @@ export function Inventario() {
         await db.accounts.where('id').equals(payAccount).modify(a => { a.balance -= totalPayment })
         if (supplierId) {
           await db.orders.add({
-            supplierId, items: [orderItem], totalUSD: formQty * costInput,
+            supplierId, items: [orderItem], totalUSD: orderTotalUSD,
             exchangeRate, totalPYG: totalPayment, shippingTotalPYG: shippingTotal,
             localCurrency: isLocal, status: 'received', orderDate: stockForm.date, createdAt: now,
           })
@@ -606,7 +623,7 @@ export function Inventario() {
         })
         if (supplierId) {
           await db.orders.add({
-            supplierId, items: [orderItem], totalUSD: formQty * costInput,
+            supplierId, items: [orderItem], totalUSD: orderTotalUSD,
             exchangeRate, totalPYG: totalPayment, shippingTotalPYG: shippingTotal,
             localCurrency: isLocal, status: 'received', orderDate: stockForm.date, createdAt: now,
           })
@@ -620,17 +637,22 @@ export function Inventario() {
   // Real-time CPP preview
   const stockProduct = products.find(p => p.id === stockForm.productId)
   const isDecantStock = stockProduct?.type === 'decant_source'
+  const isMLMode = isDecantStock && stockForm.mlMode  // modo "ML directos": compra de decants ya preparados
   const decantSizeML = stockProduct?.sizeML || 1
-  const stockQty = parseFloat(stockForm.quantity) || 0  // bottles or units (user input)
-  const stockCostUSD = parseFloat(stockForm.costUSD) || 0  // per bottle or per unit (PYG if localCurrency)
-  const stockRate = stockForm.localCurrency ? 1 : (parseFloat(stockForm.exchangeRate) || 7500)
+  const stockQty = parseFloat(stockForm.quantity) || 0  // ML (mlMode), botellas (decant normal) o unidades
+  const stockCostUSD = parseFloat(stockForm.costUSD) || 0  // total Gs. (mlMode) o por botella/unidad
+  const stockRate = (stockForm.localCurrency || isMLMode) ? 1 : (parseFloat(stockForm.exchangeRate) || 7500)
   const stockShipping = parseFloat(stockForm.shippingCostPYG) || 0
   // Per-stored-unit cost (per ML for decant, per unit for sealed)
-  const stockCostUSDStored = isDecantStock ? stockCostUSD / decantSizeML : stockCostUSD
+  const stockCostUSDStored = isMLMode
+    ? (stockQty > 0 ? stockCostUSD / stockQty : 0)  // total Gs. ÷ ML = Gs. por ML
+    : (isDecantStock ? stockCostUSD / decantSizeML : stockCostUSD)
   const stockShippingPerBottle = stockQty > 0 ? stockShipping / stockQty : 0
-  const stockShippingPerStoredUnit = isDecantStock ? stockShippingPerBottle / decantSizeML : stockShippingPerBottle
+  const stockShippingPerStoredUnit = isMLMode
+    ? stockShippingPerBottle  // shipping ÷ ML
+    : (isDecantStock ? stockShippingPerBottle / decantSizeML : stockShippingPerBottle)
   const stockBatchCostPYG = stockCostUSDStored * stockRate + stockShippingPerStoredUnit  // per ML or per unit
-  const stockActualQty = isDecantStock ? stockQty * decantSizeML : stockQty  // actual stored qty
+  const stockActualQty = isDecantStock ? (isMLMode ? stockQty : stockQty * decantSizeML) : stockQty
   const existingQty = stockProduct ? (isDecantStock ? stockProduct.stockOpenML : stockProduct.stockSealed) : 0
   const stockNewAvgCost = existingQty > 0 && stockActualQty > 0
     ? (existingQty * (stockProduct?.costPYG ?? 0) + stockActualQty * stockBatchCostPYG) / (existingQty + stockActualQty)
@@ -1355,50 +1377,75 @@ export function Inventario() {
             />
           )}
 
-          {/* Toggle moneda */}
-          <label className="flex items-center gap-3 cursor-pointer select-none">
-            <div
-              onClick={() => setStockForm(f => ({ ...f, localCurrency: !f.localCurrency }))}
-              className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${stockForm.localCurrency ? 'bg-green-500' : 'bg-gray-200'}`}
-            >
-              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${stockForm.localCurrency ? 'translate-x-5' : ''}`} />
-            </div>
-            <div>
-              <p className="text-sm font-medium text-gray-700">Compra en Guaraníes (proveedor local)</p>
-              {stockForm.localCurrency && <p className="text-xs text-green-600">Ingresá el precio directamente en Gs., sin tipo de cambio.</p>}
-            </div>
-          </label>
+          {/* Toggle ML directo — solo para decant_source */}
+          {isDecantStock && (
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <div
+                onClick={() => setStockForm(f => ({ ...f, mlMode: !f.mlMode, quantity: '', costUSD: '', localCurrency: false }))}
+                className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${stockForm.mlMode ? 'bg-violet-500' : 'bg-gray-200'}`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${stockForm.mlMode ? 'translate-x-5' : ''}`} />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-700">Ingresar ML directamente</p>
+                <p className="text-xs text-gray-400">Para decants ya preparados comprados (sin botella completa)</p>
+              </div>
+            </label>
+          )}
+
+          {/* Toggle moneda — oculto en modo ML */}
+          {!isMLMode && (
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <div
+                onClick={() => setStockForm(f => ({ ...f, localCurrency: !f.localCurrency }))}
+                className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${stockForm.localCurrency ? 'bg-green-500' : 'bg-gray-200'}`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${stockForm.localCurrency ? 'translate-x-5' : ''}`} />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-700">Compra en Guaraníes (proveedor local)</p>
+                {stockForm.localCurrency && <p className="text-xs text-green-600">Ingresá el precio directamente en Gs., sin tipo de cambio.</p>}
+              </div>
+            </label>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Input
-                label={isDecantStock ? 'Botellas recibidas' : 'Cantidad (u.)'}
+                label={isDecantStock ? (isMLMode ? 'ML recibidos' : 'Botellas recibidas') : 'Cantidad (u.)'}
                 type="number"
                 value={stockForm.quantity}
                 onChange={e => setStockForm(f => ({ ...f, quantity: e.target.value }))}
                 placeholder="0"
               />
-              {isDecantStock && stockQty > 0 && (
+              {isDecantStock && !isMLMode && stockQty > 0 && (
                 <p className="text-xs text-blue-500 mt-1">{stockQty} × {decantSizeML}ml = {stockQty * decantSizeML}ml totales</p>
               )}
             </div>
             <Input
-              label={isDecantStock
-                ? (stockForm.localCurrency ? 'Costo Gs. por botella' : 'Costo USD por botella')
-                : (stockForm.localCurrency ? 'Costo Gs. por unidad' : 'Costo USD por unidad')}
+              label={isMLMode
+                ? 'Costo total (Gs.)'
+                : (isDecantStock
+                  ? (stockForm.localCurrency ? 'Costo Gs. por botella' : 'Costo USD por botella')
+                  : (stockForm.localCurrency ? 'Costo Gs. por unidad' : 'Costo USD por unidad'))}
               type="number" value={stockForm.costUSD}
               onChange={e => setStockForm(f => ({ ...f, costUSD: e.target.value }))}
               placeholder="0"
             />
-            {!stockForm.localCurrency && (
+            {!stockForm.localCurrency && !isMLMode && (
               <Input label="Cotización USD/PYG" type="number" value={stockForm.exchangeRate} onChange={e => setStockForm(f => ({ ...f, exchangeRate: e.target.value }))} />
             )}
-            <div className={stockForm.localCurrency ? 'col-span-2' : ''}>
+            <div className={(stockForm.localCurrency || isMLMode) ? 'col-span-2' : ''}>
               <Input label="Envío total del lote (Gs.)" type="number" value={stockForm.shippingCostPYG} onChange={e => setStockForm(f => ({ ...f, shippingCostPYG: e.target.value }))} placeholder="0" />
               {stockShipping > 0 && stockQty > 0 && (
                 <p className="text-xs text-violet-600 mt-1">
-                  +{fmtPYG(Math.round(isDecantStock ? stockShippingPerBottle : stockShippingPerStoredUnit))} por {isDecantStock ? 'botella' : 'u.'}
-                  {isDecantStock && <span className="text-gray-400"> ({fmtPYG(Math.round(stockShippingPerStoredUnit))}/ml)</span>}
+                  {isMLMode
+                    ? <>+{fmtPYG(Math.round(stockShipping / stockQty))}/ml incluido en el costo</>
+                    : <>
+                        +{fmtPYG(Math.round(isDecantStock ? stockShippingPerBottle : stockShippingPerStoredUnit))} por {isDecantStock ? 'botella' : 'u.'}
+                        {isDecantStock && <span className="text-gray-400"> ({fmtPYG(Math.round(stockShippingPerStoredUnit))}/ml)</span>}
+                      </>
+                  }
                 </p>
               )}
             </div>
@@ -1412,8 +1459,14 @@ export function Inventario() {
                 <span className="text-gray-500">Costo de este lote:</span>
                 <span className="font-semibold text-gray-900 text-right">
                   {fmtPYG(Math.round(stockBatchCostPYG))} / {isDecantStock ? 'ml' : 'u.'}
-                  {isDecantStock && <span className="text-gray-400 text-xs ml-1">({fmtPYG(Math.round(stockBatchCostPYG * decantSizeML))} / botella)</span>}
+                  {isDecantStock && !isMLMode && <span className="text-gray-400 text-xs ml-1">({fmtPYG(Math.round(stockBatchCostPYG * decantSizeML))} / botella)</span>}
                 </span>
+                {isMLMode && (
+                  <>
+                    <span className="text-gray-500">Total del lote:</span>
+                    <span className="text-gray-700 text-right">{fmtPYG(Math.round(stockActualQty * stockBatchCostPYG))} por {stockActualQty}ml</span>
+                  </>
+                )}
                 {existingQty > 0 && (
                   <>
                     <span className="text-gray-500">Stock actual ({existingQty} {isDecantStock ? 'ml' : 'u.'} a {fmtPYG(Math.round(stockProduct.costPYG))}):</span>

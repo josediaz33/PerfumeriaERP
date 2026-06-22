@@ -433,11 +433,11 @@ export function Proveedores() {
       // Delete shipment batch created for this order
       const batchId = entries[0]?.shipmentBatchId
       if (batchId) await db.shipmentBatches.delete(batchId)
-      // Reverse payment movement if any
-      const movement = await db.movements.where('referenceId').equals(order.id!).filter(m => m.referenceType === 'order').first()
-      if (movement?.id) {
-        await db.accounts.where('id').equals(movement.accountId).modify(a => { a.balance += movement.amount })
-        await db.movements.delete(movement.id)
+      // Reverse all payment movements for this order (prepago + envío pueden ser dos movimientos separados)
+      const orderMovements = await db.movements.where('referenceId').equals(order.id!).filter(m => m.referenceType === 'order').toArray()
+      for (const mv of orderMovements) {
+        await db.accounts.where('id').equals(mv.accountId).modify(a => { a.balance += mv.amount })
+        await db.movements.delete(mv.id!)
       }
       await db.orders.delete(order.id!)
     })
