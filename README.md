@@ -45,7 +45,7 @@ Toda la información se almacena localmente en el navegador mediante **IndexedDB
 | **Presupuestos** | Presupuestos PDF por cliente con análisis de rentabilidad interno y conversión a pedido; aplica descuentos por ítem y descuento global |
 | **Clientes** | Directorio de clientes con historial de compras y generación de etiquetas de envío |
 | **Utilidades** | Análisis de rentabilidad histórica y distribución de ganancias |
-| **Catálogo** | Vista de productos con fichas individuales, exportación HTML interactiva compatible con iOS/WhatsApp |
+| **Catálogo** | Vista de productos con fichas individuales, exportación HTML interactiva, portal de pedidos con carrito, publicación en GitHub Pages, compatible iOS/WhatsApp/Quick Look |
 | **Configuración** | Parámetros del negocio, tipo de cambio USD/PYG, logo, PIN de acceso |
 
 ---
@@ -65,19 +65,38 @@ Toda la información se almacena localmente en el navegador mediante **IndexedDB
 - Si no hay logo, muestra la inicial del nombre sobre fondo violeta
 - Ambos son reactivos: cambian en tiempo real al guardar en Configuración sin recargar la página
 
+### Inventario — Modo ML directo para decants
+
+- **Compra de decants pre-preparados**: toggle "Ingresar ML directamente" en el formulario de stock para `decant_source`. Permite registrar ML comprados ya fraccionados (sin botella completa), con costo directo en PYG local sin conversión USD/cotización
+- En modo normal: `qty = botellas × sizeML`, costo en USD con cotización. En modo ML: `qty = ML directos`, `batchCostPYG` ingresado directamente
+
 ### Catálogo mejorado (CATX)
 
 #### Ficha individual de producto (CATX-06)
 - Clic en cualquier tarjeta del catálogo abre un modal con imagen ampliada, badges de tipo y familia olfativa, nombre, marca, concentración/tamaño, notas olfativas y precios
 - Para decants: muestra todos los tamaños con precio configurado (3ml, 5ml, 10ml, 30ml) independientemente de si existe un lote físico preparado
 
-#### Exportación HTML autocontenida (CATX-07 / CATX-08)
+#### Portal de pedidos con carrito (CATX-07 / CATX-08 / CATX-09)
 - Genera un único archivo `.html` con todas las imágenes embebidas en base64 — no requiere internet para visualizarse
-- **Modales via CSS `:target`**: cada tarjeta es un `<a href="#p-{id}">` nativo; el modal es un `<div id="p-{id}">` activado por CSS `.mow:target { display: flex }`. Funciona sin JavaScript, incluyendo iOS Quick Look (apertura desde WhatsApp)
-- Botón cierre y backdrop navegan a `#top` sin requerir JS
-- Búsqueda con `oninput` + `onkeyup` como progressive enhancement para navegadores con JS habilitado
+- **Modales via CSS `:target`**: cada tarjeta es un `<a href="#p-{id}">` nativo; el modal es un `<div id="p-{id}">` activado por CSS `.mow:target { display: flex }`. Funciona sin JavaScript, incluyendo iOS Quick Look
+- **Carrito de compras**: selector de tamaño y cantidad por producto, carrito acumulativo con barra flotante, modal de resumen con ajuste de cantidades y total en PYG
+- **Envío por WhatsApp**: el pedido completo se formatea como mensaje y se envía al número de WhatsApp del negocio configurado
+- Búsqueda: `oninput` + `onkeyup` + `onsearch` + `onchange` — compatible con iOS (botón × nativo de `<input type="search">`)
 - Descarga via `<a download>` para evitar bloqueo de popups en funciones async
 - Diseño responsive: grilla de 2 columnas en móvil, auto-fill en desktop
+
+#### Compatibilidad iOS / WhatsApp (CATX-07 fixes)
+- `viewport-fit=cover` + `env(safe-area-inset-bottom)` — contenido no tapado por barras del sistema en iPhone (Quick Look, Safari)
+- Navegación por hash: `<a href="#cart">` nativo en barra de carrito; scroll top via `.click()` en anclas existentes — resuelve el bug de `location.hash =` ignorado en WKWebView
+- Botones de agregar: clase CSS `.unready` en lugar del atributo `disabled` — resuelve el bug donde `removeAttribute("disabled")` no funciona confiablemente en WKWebView
+- `setSz` recibe `btn` (this) explícitamente — resuelve `event.currentTarget` global no disponible en handlers inline de WKWebView
+- **Banner de detección WKWebView**: detecta automáticamente cuando el HTML se abre en el navegador in-app de WhatsApp, Instagram u otras apps en iPhone, y muestra un aviso: "Para hacer pedidos, abrí en Safari"
+
+#### Publicación en GitHub Pages (CATX-10)
+- **Configuración** (una sola vez): nueva Card en Configuración con instrucciones de setup, inputs para usuario GitHub / repositorio / Personal Access Token, preview de URL resultante
+- **Botón "Publicar en línea"**: desde el módulo Catálogo, sube `catalogo.html` al repositorio via GitHub Contents API (`PUT /repos/{owner}/{repo}/contents/catalogo.html`). Obtiene SHA del archivo existente para actualizaciones; crea la rama `main` automáticamente en el primer push
+- Encoding UTF-8 → base64 seguro: `TextEncoder` → bucle `String.fromCharCode` → `btoa()` (evita truncamiento de caracteres multi-byte con `btoa()` directo)
+- Banner de resultado con URL copiable y botón de compartir por WhatsApp; banner de error con mensaje de la API
 
 ### Fixes de esta fase
 
@@ -91,6 +110,7 @@ Toda la información se almacena localmente en el navegador mediante **IndexedDB
 | **Presupuestos** | Al convertir a pedido, el precio de cada ítem aplica el descuento individual del ítem multiplicado por el descuento global del presupuesto |
 | **Ventas** | Agregar al carrito el mismo producto con diferente precio crea una línea separada en lugar de fusionar cantidades |
 | **Catálogo** | Precios de decants tomados de `product.price3ML/5ML/10ML/30ML` — no depende de que existan lotes físicos preparados para mostrar el precio |
+| **Proveedores** | Eliminar un pedido recibido ahora revierte **todos** los movimientos de pago asociados (prepago + envío); antes solo revertía el primero por uso de `.first()` en lugar de `.toArray()` + loop |
 
 ---
 
@@ -248,7 +268,9 @@ Los precios visibles en el catálogo (app y HTML exportado) se toman de `product
 ### Catálogo
 - **Vista interna**: grid responsive de productos con foto, badge de tipo y familia olfativa, precios por tamaño
 - **Ficha de producto (CATX-06)**: modal al clic con imagen ampliada, todos los datos del producto y precios por tamaño configurados
-- **Export HTML (CATX-07/08)**: archivo autocontenido con imágenes en base64, modales CSS `:target` sin JS, búsqueda como enhancement, diseño responsive; compatible con iOS Quick Look / WhatsApp
+- **Portal de pedidos HTML (CATX-07/08/09)**: archivo autocontenido con imágenes en base64, modales CSS `:target`, carrito multi-producto, envío por WhatsApp; búsqueda + filtros responsive; compatible iOS Quick Look / WKWebView / Android
+- **Banner WKWebView**: detecta apertura en navegador in-app de WhatsApp en iOS y guía al usuario a abrirlo en Safari
+- **Publicación en GitHub Pages (CATX-10)**: sube el HTML generado al repositorio configurado via API; URL pública permanente compartible por WhatsApp
 - **Export PDF**: tabla con productos filtrados, branding oscuro/dorado, logo del negocio
 
 ### Cuentas
@@ -272,7 +294,6 @@ Los precios visibles en el catálogo (app y HTML exportado) se toman de `product
 | ID | Feature | Descripción |
 |----|---------|-------------|
 | BRAND-06 | Color de acento configurable | Permitir cambiar el color primario de la UI (violeta) desde Configuración |
-| CATX-09 | Botón "Pedir por WhatsApp" en HTML | En cada modal del catálogo exportado, botón que arma un mensaje de WhatsApp pre-llenado con el producto y precio seleccionado |
 
 ### Fase 3 — Analytics
 

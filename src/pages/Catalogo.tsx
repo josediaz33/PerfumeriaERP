@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { Search, Download, BookImage, FileCode, X } from 'lucide-react'
-import { db } from '../db/db'
+import { Search, Download, BookImage, FileCode, X, Globe, Copy, Check } from 'lucide-react'
+import { db, getConfig } from '../db/db'
 import type { Product, OlfactiveFamily } from '../db/types'
 import { fmtPYG } from '../lib/format'
 import { blobToBase64 } from '../lib/images'
@@ -141,6 +141,10 @@ export function Catalogo() {
   const [minPrice, setMinPrice] = useState('')
   const [maxPrice, setMaxPrice] = useState('')
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
+  const [publishing, setPublishing] = useState(false)
+  const [publishedUrl, setPublishedUrl] = useState('')
+  const [publishError, setPublishError] = useState('')
+  const [urlCopied, setUrlCopied] = useState(false)
 
   const available = products.filter(p => {
     if (p.catalogVisible === false) return false
@@ -244,7 +248,7 @@ export function Catalogo() {
   }
 
   // ── CATX-07/08/09: Mini portal de pedidos — HTML autocontenido, interactivo, compatible iOS ──
-  async function exportHTML() {
+  async function buildCatalogHTML(): Promise<{ html: string; filename: string }> {
     const configName = await db.config.where('key').equals('business_name').first()
     const businessName = configName?.value || 'JODA Parfums'
     const configPhone = await db.config.where('key').equals('business_phone').first()
@@ -327,7 +331,7 @@ export function Catalogo() {
         ? '<p class="sz-lbl">Elegí el tamaño</p>' +
           '<div class="sz-sel" id="sz-' + p.id + '">' +
           szs.map(b =>
-            '<button class="sz-btn" onclick="setSz(' + p.id + ',' + b.sizeML + ',' + b.sellingPricePYG + ')">' +
+            '<button class="sz-btn" onclick="setSz(' + p.id + ',' + b.sizeML + ',' + b.sellingPricePYG + ',this)">' +
             '<span class="sz-ml">' + b.sizeML + 'ml</span>' +
             '<span class="sz-pr">Gs. ' + b.sellingPricePYG.toLocaleString('es-PY') + '</span>' +
             '</button>'
@@ -342,8 +346,8 @@ export function Catalogo() {
           : '<p class="consult">Precio a consultar</p>')
         : ''
 
-      // Botón agregar: disabled para decants hasta que se elige tamaño
-      const addDisabled = isDecant ? ' disabled' : ''
+      // Botón agregar: clase .unready para decants hasta que se elige tamaño (evita atributo disabled, problemático en iOS WKWebView)
+      const addClass = isDecant ? 'add-btn unready' : 'add-btn'
 
       // Modal con :target CSS + controles de pedido
       const modal =
@@ -366,7 +370,7 @@ export function Catalogo() {
         '<span class="qty-val" id="qty-' + p.id + '">1</span>' +
         '<button class="qty-btn" onclick="adjQty(' + p.id + ',1)">+</button>' +
         '</div>' +
-        '<button class="add-btn" id="add-' + p.id + '"' + addDisabled + ' onclick="addCart(' + p.id + ')">' +
+        '<button class="' + addClass + '" id="add-' + p.id + '" onclick="addCart(' + p.id + ')">' +
         'Agregar al pedido' +
         '</button>' +
         '</div>' +
@@ -404,6 +408,9 @@ export function Catalogo() {
     const css = [
       '*{margin:0;padding:0;box-sizing:border-box}',
       'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f4f2ee;color:#1a1a2e;min-height:100vh}',
+      '.wv-banner{display:none;background:#1e40af;color:#fff;padding:14px 18px;text-align:center}',
+      '.wv-banner strong{display:block;font-size:14px;font-weight:700;margin-bottom:3px}',
+      '.wv-banner span{display:block;font-size:12px;opacity:.85}',
       'header{background:linear-gradient(135deg,#141212,#1e1a1a);padding:20px 28px;display:flex;align-items:center;gap:16px}',
       '.lb{width:46px;height:46px;border-radius:11px;overflow:hidden;background:#2a2520;border:1px solid #3a3028;display:flex;align-items:center;justify-content:center;flex-shrink:0}',
       '.lb img{width:100%;height:100%;object-fit:cover}',
@@ -412,7 +419,7 @@ export function Catalogo() {
       '.hn{color:#c8a96e;font-size:18px;font-weight:700;letter-spacing:-.2px}',
       '.hs{color:#7a6545;font-size:12px;margin-top:2px}',
       '.hd{color:#5e4e35;font-size:11px;white-space:nowrap}',
-      'main{max-width:1200px;margin:0 auto;padding:24px 20px 100px}',
+      'main{max-width:1200px;margin:0 auto;padding:24px 20px calc(100px + env(safe-area-inset-bottom,0px))}',
       '.bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;gap:10px;flex-wrap:wrap}',
       '.cnt{font-size:13px;color:#999}',
       '.sw{position:relative}',
@@ -450,7 +457,7 @@ export function Catalogo() {
       '@media(min-width:600px){.mi{border-radius:16px 16px 0 0}}',
       '.mi img{width:100%;height:100%;object-fit:cover}',
       '.mi .ph{font-size:80px}',
-      '.mb{padding:20px 20px 28px}',
+      '.mb{padding:20px 20px calc(28px + env(safe-area-inset-bottom,0px))}',
       '.mbg{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}',
       '.mtit{font-size:22px;font-weight:800;color:#111;line-height:1.2}',
       '.mbrnd{font-size:14px;color:#888;margin-top:3px}',
@@ -473,9 +480,9 @@ export function Catalogo() {
       '.qty-btn:active{background:#ede9fe}',
       '.qty-val{min-width:34px;text-align:center;font-size:16px;font-weight:800;color:#5b21b6}',
       '.add-btn{flex:1;padding:12px 16px;background:#7c3aed;color:#fff;border:none;border-radius:11px;font-size:14px;font-weight:700;cursor:pointer;transition:background .15s,transform .1s;touch-action:manipulation;-webkit-tap-highlight-color:transparent;letter-spacing:.1px}',
-      '.add-btn:hover:not(:disabled){background:#6d28d9}',
-      '.add-btn:active:not(:disabled){transform:scale(.97)}',
-      '.add-btn:disabled{background:#c4b5fd;cursor:default}',
+      '.add-btn:hover:not(.unready){background:#6d28d9}',
+      '.add-btn:active:not(.unready){transform:scale(.97)}',
+      '.add-btn.unready{background:#c4b5fd;cursor:default}',
       '.add-btn.ok{background:#16a34a!important}',
       // Shake animation for size selector
       '@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-6px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}}',
@@ -484,7 +491,7 @@ export function Catalogo() {
       'a.xcl{position:absolute;top:12px;right:12px;width:36px;height:36px;background:rgba(255,255,255,.92);border-radius:50%;font-size:16px;display:flex;align-items:center;justify-content:center;text-decoration:none;color:#555;box-shadow:0 2px 8px rgba(0,0,0,.14);z-index:2;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);touch-action:manipulation;-webkit-tap-highlight-color:transparent;cursor:pointer;line-height:1}',
       'a.xcl:hover{background:#fff;color:#111}',
       // Cart bar — fixed bottom
-      '#cart-bar{position:fixed;bottom:0;left:0;right:0;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;padding:13px 20px;display:none;align-items:center;justify-content:space-between;cursor:pointer;z-index:50;box-shadow:0 -4px 24px rgba(124,58,237,.4);touch-action:manipulation;-webkit-tap-highlight-color:transparent}',
+      '#cart-bar{position:fixed;bottom:0;left:0;right:0;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;text-decoration:none;padding:13px 20px;padding-bottom:calc(13px + env(safe-area-inset-bottom,0px));display:none;align-items:center;justify-content:space-between;cursor:pointer;z-index:50;box-shadow:0 -4px 24px rgba(124,58,237,.4);touch-action:manipulation;-webkit-tap-highlight-color:transparent}',
       '.cb-l{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:500}',
       '.cb-ic{font-size:17px}',
       '.cb-r{display:flex;align-items:center;gap:6px}',
@@ -514,7 +521,7 @@ export function Catalogo() {
       'footer{text-align:center;padding:24px;color:#aaa;font-size:12px;border-top:1px solid #e8e4dc}',
       'footer b{color:#9a7b3f}',
       // Responsive
-      '@media(max-width:600px){.grid{grid-template-columns:repeat(2,1fr);gap:11px}main{padding:16px 12px 90px}header{padding:14px 16px}.hd{display:none}.sw input{width:170px}}',
+      '@media(max-width:600px){.grid{grid-template-columns:repeat(2,1fr);gap:11px}main{padding:16px 12px calc(90px + env(safe-area-inset-bottom,0px))}header{padding:14px 16px}.hd{display:none}.sw input{width:170px}}',
     ].join('\n')
 
     // JS del portal de pedidos
@@ -524,20 +531,20 @@ export function Catalogo() {
       'var cart=[];var selSz={};var selQty={};',
 
       // Búsqueda
-      'function fc(q){q=q.toLowerCase().trim();var t=0;',
+      'function fc(q){q=(q||"").toLowerCase().trim();var t=0;',
       'document.querySelectorAll("a.card").forEach(function(c){',
-      'var s=!q||c.dataset.name.toLowerCase().includes(q)||c.dataset.brand.toLowerCase().includes(q);',
-      'c.style.display=s?"":"none";if(s)t++;});',
+      'var s=!q||(c.dataset.name||"").toLowerCase().includes(q)||(c.dataset.brand||"").toLowerCase().includes(q);',
+      'c.style.display=s?"flex":"none";if(s)t++;});',
       'var el=document.getElementById("cnt");',
       'if(el)el.textContent=t+" producto"+(t!==1?"s":"")+" disponible"+(t!==1?"s":"");}',
 
-      // Seleccionar tamaño
-      'function setSz(id,ml,price){',
+      // Seleccionar tamaño — recibe `this`; usa classList en lugar de atributo disabled (más confiable en iOS)
+      'function setSz(id,ml,price,btn){',
       'selSz[id]={ml:ml,price:price};',
       'document.querySelectorAll("#sz-"+id+" .sz-btn").forEach(function(b){b.classList.remove("active");});',
-      'event.currentTarget.classList.add("active");',
-      'var btn=document.getElementById("add-"+id);',
-      'if(btn)btn.removeAttribute("disabled");}',
+      'if(btn)btn.classList.add("active");',
+      'var ab=document.getElementById("add-"+id);',
+      'if(ab)ab.classList.remove("unready");}',
 
       // Ajustar cantidad
       'function adjQty(id,d){',
@@ -564,13 +571,13 @@ export function Catalogo() {
       'selQty[id]=1;',
       'var qv=document.getElementById("qty-"+id);if(qv)qv.textContent="1";',
       'var btn=document.getElementById("add-"+id);',
-      'if(btn){btn.textContent="\\u2713 Agregado";btn.classList.add("ok");btn.setAttribute("disabled","");',
+      'if(btn){btn.textContent="\\u2713 Agregado";btn.classList.add("ok","unready");',
       'setTimeout(function(){',
       'btn.textContent="Agregar al pedido";btn.classList.remove("ok");',
-      'if(isd){btn.setAttribute("disabled","");selSz[id]=null;',
+      'if(isd){btn.classList.add("unready");selSz[id]=null;',
       'document.querySelectorAll("#sz-"+id+" .sz-btn").forEach(function(b){b.classList.remove("active");});}',
-      'else{btn.removeAttribute("disabled");}',
-      'location.hash="#top";',
+      'else{btn.classList.remove("unready");}',
+      'var at=document.querySelector(\'a[href="#top"]\');if(at)at.click();',
       '},750);}',
       'updateCart();}',
 
@@ -582,7 +589,7 @@ export function Catalogo() {
       'if(!bar)return;',
       'if(count>0){',
       'bar.style.display="flex";',
-      'document.body.style.paddingBottom="70px";',
+      'document.body.style.paddingBottom="calc(80px + env(safe-area-inset-bottom,0px))";',
       'document.getElementById("cb-n").textContent=count+" "+(count===1?"ítem":"ítems");',
       'document.getElementById("cb-total").textContent="Gs. "+total.toLocaleString("es-PY");',
       '}else{bar.style.display="none";document.body.style.paddingBottom="";}',
@@ -628,18 +635,28 @@ export function Catalogo() {
       'window.open(url,"_blank");}',
 
       // Escape key cierra modal
-      'document.addEventListener("keydown",function(e){if(e.key==="Escape"&&location.hash.startsWith("#"))location.hash="#top";});',
+      'document.addEventListener("keydown",function(e){if(e.key==="Escape"&&location.hash.startsWith("#")){var at=document.querySelector(\'a[href="#top"]\');if(at)at.click();}});',
     ].join('\n')
 
     const html = '<!DOCTYPE html>\n' +
       '<html lang="es">\n<head>\n' +
       '<meta charset="UTF-8"/>\n' +
-      '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>\n' +
+      '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover"/>\n' +
       '<meta name="theme-color" content="#141212"/>\n' +
       '<title>' + escHtml(businessName) + ' — Catálogo</title>\n' +
       '<style>\n' + css + '\n</style>\n' +
       '</head>\n<body>\n' +
       '<div id="top"></div>\n' +
+      '<div id="wv-banner" class="wv-banner">' +
+      '<strong>Para hacer pedidos, abrí este catálogo en Safari</strong>' +
+      '<span>Tocá &#8943; o el ícono Compartir → "Abrir en Safari"</span>' +
+      '</div>\n' +
+      '<script>(function(){' +
+      'var ua=navigator.userAgent;' +
+      'var isIOS=/iPhone|iPad|iPod/i.test(ua);' +
+      'var inWV=isIOS&&/AppleWebKit/i.test(ua)&&!/Safari\\/\\d/.test(ua);' +
+      'if(inWV){var b=document.getElementById("wv-banner");if(b)b.style.display="block";}' +
+      '})();</script>\n' +
       '<header>\n' +
       '  <div class="lb">' + logoHtml + '</div>\n' +
       '  <div class="ht">\n' +
@@ -653,7 +670,7 @@ export function Catalogo() {
       '    <span class="cnt" id="cnt">' + n + ' producto' + (n !== 1 ? 's' : '') + ' disponible' + (n !== 1 ? 's' : '') + '</span>\n' +
       '    <div class="sw">\n' +
       '      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>\n' +
-      '      <input type="search" placeholder="Buscar perfume o marca..." oninput="fc(this.value)" onkeyup="fc(this.value)" />\n' +
+      '      <input type="search" placeholder="Buscar perfume o marca..." oninput="fc(this.value)" onkeyup="fc(this.value)" onsearch="fc(this.value)" onchange="fc(this.value)" autocomplete="off" autocorrect="off" autocapitalize="off" />\n' +
       '    </div>\n' +
       '  </div>\n' +
       '  <div class="grid">\n' + productCards.join('\n') + '\n  </div>\n' +
@@ -664,20 +681,95 @@ export function Catalogo() {
       // Modal del carrito
       cartModal + '\n' +
       // Barra de carrito fija
-      '<div id="cart-bar" onclick="location.hash=\'#cart\'">\n' +
+      '<a id="cart-bar" href="#cart">\n' +
       '  <div class="cb-l"><span class="cb-ic">&#128722;</span><span id="cb-n">0 &iacute;tems</span></div>\n' +
       '  <div class="cb-r"><span class="cb-total" id="cb-total">Gs. 0</span><span class="cb-cta">Ver pedido &rarr;</span></div>\n' +
-      '</div>\n' +
+      '</a>\n' +
       '<script>\n' + js + '\n</script>\n' +
       '</body>\n</html>'
 
+    const filename = escHtml(businessName).replace(/[^a-zA-Z0-9]/g, '-') + '-catalogo.html'
+    return { html, filename }
+  }
+
+  async function exportHTML() {
+    const { html, filename } = await buildCatalogHTML()
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
     const blobUrl = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = blobUrl
-    a.download = escHtml(businessName).replace(/[^a-zA-Z0-9]/g, '-') + '-catalogo.html'
+    a.download = filename
     a.click()
     URL.revokeObjectURL(blobUrl)
+  }
+
+  async function publishGitHub() {
+    const token = await getConfig('github_token')
+    const username = await getConfig('github_username')
+    const repo = await getConfig('github_repo')
+
+    if (!token || !username || !repo) {
+      setPublishError('Configurá GitHub Pages en Configuración antes de publicar.')
+      return
+    }
+
+    setPublishing(true)
+    setPublishError('')
+    setPublishedUrl('')
+
+    try {
+      const { html } = await buildCatalogHTML()
+
+      // Encode UTF-8 → base64 (btoa solo acepta Latin-1)
+      const bytes = new TextEncoder().encode(html)
+      let binary = ''
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+      const content = btoa(binary)
+
+      const apiUrl = `https://api.github.com/repos/${username}/${repo}/contents/catalogo.html`
+      const headers = {
+        'Authorization': `token ${token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/vnd.github.v3+json',
+      }
+
+      // Obtener SHA del archivo actual (necesario para actualizar)
+      let sha: string | undefined
+      const getRes = await fetch(apiUrl, { headers })
+      if (getRes.ok) {
+        const data = await getRes.json()
+        sha = data.sha
+      } else if (getRes.status !== 404) {
+        throw new Error(`Error al acceder al repositorio (${getRes.status})`)
+      }
+
+      // Crear o actualizar archivo
+      const body: Record<string, string> = { message: 'Actualizar catálogo', content }
+      if (sha) body.sha = sha
+
+      const putRes = await fetch(apiUrl, { method: 'PUT', headers, body: JSON.stringify(body) })
+      if (!putRes.ok) {
+        const err = await putRes.json()
+        throw new Error(err.message ?? `Error ${putRes.status}`)
+      }
+
+      const pageUrl = repo === `${username}.github.io`
+        ? `https://${username}.github.io/catalogo.html`
+        : `https://${username}.github.io/${repo}/catalogo.html`
+
+      setPublishedUrl(pageUrl)
+    } catch (e) {
+      setPublishError(e instanceof Error ? e.message : 'Error desconocido al publicar')
+    } finally {
+      setPublishing(false)
+    }
+  }
+
+  async function copyPublishedUrl() {
+    if (!publishedUrl) return
+    await navigator.clipboard.writeText(publishedUrl)
+    setUrlCopied(true)
+    setTimeout(() => setUrlCopied(false), 2000)
   }
 
   return (
@@ -686,7 +778,15 @@ export function Catalogo() {
         title="Catálogo"
         subtitle="Productos disponibles para compartir con clientes"
         action={
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            <Button
+              variant="secondary"
+              icon={<Globe size={15} />}
+              onClick={publishGitHub}
+              disabled={publishing}
+            >
+              {publishing ? 'Publicando...' : 'Publicar en línea'}
+            </Button>
             <Button variant="secondary" icon={<FileCode size={15} />} onClick={exportHTML}>
               Exportar HTML
             </Button>
@@ -696,6 +796,50 @@ export function Catalogo() {
           </div>
         }
       />
+
+      {/* Banner resultado de publicación */}
+      {publishedUrl && (
+        <div className="mb-5 bg-green-50 border border-green-200 rounded-xl p-4 flex items-start gap-3">
+          <Check size={18} className="text-green-600 mt-0.5 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-green-800">¡Catálogo publicado correctamente!</p>
+            <p className="text-xs font-mono text-green-700 mt-1 break-all">{publishedUrl}</p>
+            <p className="text-xs text-green-500 mt-1">Puede tardar 1–2 minutos en actualizarse la primera vez.</p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            <button
+              onClick={copyPublishedUrl}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg transition-colors"
+            >
+              {urlCopied ? <Check size={12} /> : <Copy size={12} />}
+              {urlCopied ? 'Copiado' : 'Copiar URL'}
+            </button>
+            <a
+              href={`https://wa.me/?text=${encodeURIComponent('Nuestro catálogo de fragancias: ' + publishedUrl)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#25D366] hover:bg-[#22c55e] text-white text-xs font-semibold rounded-lg transition-colors"
+            >
+              WhatsApp
+            </a>
+            <button onClick={() => setPublishedUrl('')} className="p-1 text-green-400 hover:text-green-700 transition-colors">
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+      {publishError && (
+        <div className="mb-5 bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+          <span className="text-red-500 font-bold shrink-0 mt-0.5">!</span>
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-red-800">Error al publicar</p>
+            <p className="text-xs text-red-600 mt-0.5">{publishError}</p>
+          </div>
+          <button onClick={() => setPublishError('')} className="p-1 text-red-400 hover:text-red-600 transition-colors shrink-0">
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {/* Filtros */}
       <div className="flex flex-wrap gap-3 mb-6">

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Settings, Save, Download, Upload, RefreshCw, ImageIcon, X, Lock, LockOpen } from 'lucide-react'
+import { Settings, Save, Download, Upload, RefreshCw, ImageIcon, X, Lock, LockOpen, Globe } from 'lucide-react'
 import { db, getConfig, setConfig } from '../db/db'
 import { compressImage, blobToBase64, base64ToBlob, createObjectURL } from '../lib/images'
 import { PageHeader } from '../components/ui/PageHeader'
@@ -21,6 +21,11 @@ export function Configuracion() {
   const [pinSaved, setPinSaved] = useState(false)
   const [pinError, setPinError] = useState('')
 
+  const [ghToken, setGhToken] = useState('')
+  const [ghUser, setGhUser] = useState('')
+  const [ghRepo, setGhRepo] = useState('')
+  const [ghSaved, setGhSaved] = useState(false)
+
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
   const [logoUploading, setLogoUploading] = useState(false)
   const logoRef = useRef<string | null>(null)
@@ -31,6 +36,9 @@ export function Configuracion() {
       setBusinessPhone(await getConfig('business_phone'))
       setBusinessAddress(await getConfig('business_address'))
       setUsdRate(await getConfig('usd_pyg_rate'))
+      setGhToken(await getConfig('github_token'))
+      setGhUser(await getConfig('github_username'))
+      setGhRepo(await getConfig('github_repo'))
       const img = await db.images.get(LOGO_IMAGE_ID)
       if (img) {
         const url = createObjectURL(img.blob)
@@ -106,6 +114,14 @@ export function Configuracion() {
     if (newPin) sessionStorage.setItem('joda_unlocked', '1')
     else sessionStorage.removeItem('joda_unlocked')
     setTimeout(() => setPinSaved(false), 2000)
+  }
+
+  async function handleSaveGitHub() {
+    await setConfig('github_token', ghToken.trim())
+    await setConfig('github_username', ghUser.trim())
+    await setConfig('github_repo', ghRepo.trim())
+    setGhSaved(true)
+    setTimeout(() => setGhSaved(false), 2000)
   }
 
   async function exportData() {
@@ -337,6 +353,63 @@ export function Configuracion() {
             </div>
           </CardBody>
         </Card>
+
+        {/* Publicación del catálogo — GitHub Pages */}
+        <div className="lg:col-span-2">
+          <Card>
+            <CardHeader>
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                <Globe size={16} className="text-violet-600" />
+                Publicación del catálogo en línea (GitHub Pages)
+              </h3>
+            </CardHeader>
+            <CardBody className="space-y-4">
+              <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm space-y-2">
+                <p className="font-semibold text-blue-800">Configuración inicial (una sola vez):</p>
+                <ol className="list-decimal list-inside space-y-1 text-blue-700">
+                  <li>Creá un repositorio <strong>público</strong> en github.com (ej. <code className="bg-blue-100 px-1 rounded">joda-catalogo</code>)</li>
+                  <li>Activá GitHub Pages: <strong>Settings → Pages → Deploy from branch → main → / (root)</strong></li>
+                  <li>Generá un token en: <strong>Settings → Developer settings → Personal access tokens → Tokens (classic)</strong> con permiso <code className="bg-blue-100 px-1 rounded">repo</code></li>
+                  <li>Guardá los datos abajo — después usá el botón <strong>"Publicar en línea"</strong> en el Catálogo</li>
+                </ol>
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <Input
+                  label="Usuario GitHub"
+                  placeholder="tu-usuario"
+                  value={ghUser}
+                  onChange={e => setGhUser(e.target.value)}
+                />
+                <Input
+                  label="Repositorio"
+                  placeholder="joda-catalogo"
+                  value={ghRepo}
+                  onChange={e => setGhRepo(e.target.value)}
+                />
+                <Input
+                  label="Personal Access Token"
+                  type="password"
+                  placeholder="ghp_xxxxxxxxxxxx"
+                  value={ghToken}
+                  onChange={e => setGhToken(e.target.value)}
+                />
+              </div>
+              {ghUser && ghRepo && (
+                <p className="text-xs text-gray-500">
+                  URL del catálogo:{' '}
+                  <span className="font-mono text-violet-700">
+                    {ghRepo === `${ghUser}.github.io`
+                      ? `https://${ghUser}.github.io/catalogo.html`
+                      : `https://${ghUser}.github.io/${ghRepo}/catalogo.html`}
+                  </span>
+                </p>
+              )}
+              <Button className="w-full" icon={<Save size={15} />} onClick={handleSaveGitHub}>
+                {ghSaved ? '¡Guardado!' : 'Guardar configuración de GitHub'}
+              </Button>
+            </CardBody>
+          </Card>
+        </div>
 
         {/* Info del sistema */}
         <Card>
