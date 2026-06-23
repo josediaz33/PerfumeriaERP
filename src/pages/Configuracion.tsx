@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Settings, Save, Download, Upload, RefreshCw, ImageIcon, X, Lock, LockOpen, Globe } from 'lucide-react'
+import { Settings, Save, Download, Upload, RefreshCw, ImageIcon, X, Lock, LockOpen, Globe, Palette } from 'lucide-react'
 import { db, getConfig, setConfig } from '../db/db'
 import { compressImage, blobToBase64, base64ToBlob, createObjectURL } from '../lib/images'
 import { PageHeader } from '../components/ui/PageHeader'
@@ -26,6 +26,8 @@ export function Configuracion() {
   const [ghRepo, setGhRepo] = useState('')
   const [ghSaved, setGhSaved] = useState(false)
 
+  const [brandColor, setBrandColor] = useState('violet')
+
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
   const [logoUploading, setLogoUploading] = useState(false)
   const logoRef = useRef<string | null>(null)
@@ -39,6 +41,7 @@ export function Configuracion() {
       setGhToken(await getConfig('github_token'))
       setGhUser(await getConfig('github_username'))
       setGhRepo(await getConfig('github_repo'))
+      setBrandColor((await getConfig('brand_color')) || 'violet')
       const img = await db.images.get(LOGO_IMAGE_ID)
       if (img) {
         const url = createObjectURL(img.blob)
@@ -114,6 +117,11 @@ export function Configuracion() {
     if (newPin) sessionStorage.setItem('joda_unlocked', '1')
     else sessionStorage.removeItem('joda_unlocked')
     setTimeout(() => setPinSaved(false), 2000)
+  }
+
+  async function handleColorChange(key: string) {
+    setBrandColor(key)
+    await setConfig('brand_color', key)
   }
 
   async function handleSaveGitHub() {
@@ -258,6 +266,46 @@ export function Configuracion() {
               {logoUploading ? 'Procesando...' : logoUrl ? 'Cambiar logo' : 'Subir logo (PNG / JPG)'}
               <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleLogoUpload} disabled={logoUploading} />
             </label>
+          </CardBody>
+        </Card>
+
+        {/* Color de acento */}
+        <Card>
+          <CardHeader>
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+              <Palette size={16} className="text-violet-600" />
+              Color de acento
+            </h3>
+          </CardHeader>
+          <CardBody className="space-y-4">
+            <p className="text-sm text-gray-500">Se aplica en toda la interfaz al instante.</p>
+            <div className="flex gap-3 flex-wrap">
+              {([
+                { key: 'violet',  label: 'Violeta',    hex: '#7c3aed' },
+                { key: 'indigo',  label: 'Índigo',     hex: '#4f46e5' },
+                { key: 'blue',    label: 'Azul',       hex: '#2563eb' },
+                { key: 'sky',     label: 'Cielo',      hex: '#0284c7' },
+                { key: 'teal',    label: 'Verde azul', hex: '#0d9488' },
+                { key: 'emerald', label: 'Esmeralda',  hex: '#059669' },
+                { key: 'rose',    label: 'Rosa',       hex: '#e11d48' },
+                { key: 'orange',  label: 'Naranja',    hex: '#ea580c' },
+              ] as const).map(c => (
+                <button
+                  key={c.key}
+                  title={c.label}
+                  onClick={() => handleColorChange(c.key)}
+                  className="relative w-9 h-9 rounded-full transition-transform hover:scale-110 focus:outline-none"
+                  style={{ backgroundColor: c.hex }}
+                >
+                  {brandColor === c.key && (
+                    <span className="absolute inset-0 flex items-center justify-center text-white text-base font-bold drop-shadow">✓</span>
+                  )}
+                  {brandColor === c.key && (
+                    <span className="absolute -inset-1 rounded-full border-2 pointer-events-none" style={{ borderColor: c.hex }} />
+                  )}
+                </button>
+              ))}
+            </div>
           </CardBody>
         </Card>
 
