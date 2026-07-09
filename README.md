@@ -10,15 +10,15 @@
 
 ---
 
-## Estado actual — v2.0 (Fase 2 en curso)
+## Estado actual — v2.1
 
 | Fase | Estado | Descripción |
 |------|--------|-------------|
 | **Fase 1 — MVP Operativo** | ✅ Completa | Inventario, ventas, logística, contabilidad, presupuestos, clientes, utilidades |
-| **Fase 2 — Branding y Catálogo** | 🔄 En curso | Identidad visual, catálogo exportable, seguridad por PIN |
+| **Fase 2 — Branding y Catálogo** | ✅ Completa | Identidad visual, catálogo exportable, PIN, color de acento configurable |
 | **Fase 3 — Analytics** | 📋 Planificada | Dashboard avanzado, reportes, exportaciones extendidas |
-| **Fase 4 — UX avanzada** | 📋 Planificada | Color de acento configurable, modo oscuro, accesos rápidos |
-| **Fase 5 — Sourcing** | 📋 Planificada | Comparador de proveedores, integración pedido ↔ sourcing |
+| **Fase 4 — UX avanzada** | 📋 Planificada | Modo oscuro, accesos rápidos, notificaciones internas |
+| **Fase 5 — Sourcing** | ✅ Completa | Comparador de proveedores con conversión a pedido; pendiente: MAY-08 |
 
 ---
 
@@ -46,7 +46,8 @@ Toda la información se almacena localmente en el navegador mediante **IndexedDB
 | **Clientes** | Directorio de clientes con historial de compras y generación de etiquetas de envío |
 | **Utilidades** | Análisis de rentabilidad histórica y distribución de ganancias |
 | **Catálogo** | Vista de productos con fichas individuales, exportación HTML interactiva, portal de pedidos con carrito, publicación en GitHub Pages, compatible iOS/WhatsApp/Quick Look |
-| **Configuración** | Parámetros del negocio, tipo de cambio USD/PYG, logo, PIN de acceso |
+| **Comparador** | Solicitudes de cotización a múltiples proveedores, tabla comparativa (mejor total y mix óptimo por ítem), análisis de margen por línea y conversión directa a orden de compra |
+| **Configuración** | Parámetros del negocio, tipo de cambio USD/PYG, logo, PIN de acceso, color de acento |
 
 ---
 
@@ -98,6 +99,26 @@ Toda la información se almacena localmente en el navegador mediante **IndexedDB
 - Encoding UTF-8 → base64 seguro: `TextEncoder` → bucle `String.fromCharCode` → `btoa()` (evita truncamiento de caracteres multi-byte con `btoa()` directo)
 - Banner de resultado con URL copiable y botón de compartir por WhatsApp; banner de error con mensaje de la API
 
+### Comparador de proveedores — SOURCE (Fase 5)
+
+#### Modelo de datos (DB schema v6)
+- Tres tablas nuevas: `sourcingRequests`, `sourcingLines`, `supplierQuotes`
+- `SourcingRequest`: cabecera de solicitud con estado (`draft → quoting → decided → ordered → closed`)
+- `SourcingLine`: cada producto/item a cotizar, con destino `stock` o `client`, cliente y precio de venta esperado opcionales
+- `SupplierQuote`: oferta de un proveedor con flete en Guaraníes (`estimatedShippingPYG`), cotización USD/PYG y precios por línea
+
+#### Flujo completo
+1. **Solicitud**: crear cabecera y cargar líneas (producto existente o texto libre, cantidad, destino)
+2. **Cotizaciones**: agregar oferta por proveedor con precio USD por ítem, flete estimado en Gs. y cotización; edición en cualquier momento mientras el estado sea `quoting`
+3. **Comparativa**: tabla cruzada con costo puesto (subtotal USD × cotización + flete proporcional); escenario A (menor total con un solo proveedor) y escenario B (mix óptimo eligiendo el mejor precio ítem a ítem); alerta de margen para líneas con destino `client`
+4. **Conversión a orden**: genera un `Order` en Proveedores con los ítems cotizados; pre-crea en Inventario los productos nuevos con `stockSealed: 0`; las líneas sin cotización son filtradas automáticamente
+
+#### Fórmula de costo
+```
+fleteProporcional = estimatedShippingPYG × (subtotalLineaUSD / totalSubtotalUSD)
+costoPYGLinea = subtotalLineaUSD × exchangeRate + fleteProporcional
+```
+
 ### Fixes de esta fase
 
 | Módulo | Fix |
@@ -111,6 +132,8 @@ Toda la información se almacena localmente en el navegador mediante **IndexedDB
 | **Ventas** | Agregar al carrito el mismo producto con diferente precio crea una línea separada en lugar de fusionar cantidades |
 | **Catálogo** | Precios de decants tomados de `product.price3ML/5ML/10ML/30ML` — no depende de que existan lotes físicos preparados para mostrar el precio |
 | **Proveedores** | Eliminar un pedido recibido ahora revierte **todos** los movimientos de pago asociados (prepago + envío); antes solo revertía el primero por uso de `.first()` en lugar de `.toArray()` + loop |
+| **Inventario** | Al cambiar el tipo de producto entre sellado/tester ↔ decant\_source, el CPP se convierte automáticamente (÷ sizeML o × sizeML) para mantener la coherencia por-ml vs por-botella |
+| **Inventario** | Los lotes de un producto sellado cuya botella fue abierta para decants muestran "→ X ml abiertos" en lugar de "agotado", eliminando la inconsistencia visual |
 
 ---
 
@@ -289,11 +312,11 @@ Los precios visibles en el catálogo (app y HTML exportado) se toman de `product
 
 ## Próximo a desarrollar
 
-### Fase 2 — pendientes
+### Fase 5 — Sourcing (pendiente menor)
 
 | ID | Feature | Descripción |
 |----|---------|-------------|
-| BRAND-06 | Color de acento configurable | Permitir cambiar el color primario de la UI (violeta) desde Configuración |
+| MAY-08 | sobrePedido → SourcingRequest | Los ítems marcados "sobre pedido" en un presupuesto generan automáticamente una SourcingRequest en el Comparador |
 
 ### Fase 3 — Analytics
 
@@ -310,14 +333,6 @@ Los precios visibles en el catálogo (app y HTML exportado) se toman de `product
 | UX-01 | Modo oscuro | Toggle claro/oscuro con persistencia en config |
 | UX-02 | Accesos rápidos | Atajos de teclado para acciones frecuentes (nueva venta, nuevo pedido) |
 | UX-03 | Notificaciones internas | Alertas de stock mínimo y pedidos pendientes visibles en el sidebar |
-
-### Fase 5 — Sourcing
-
-| ID | Feature | Descripción |
-|----|---------|-------------|
-| SOURCE-01 | Módulo de sourcing | Comparador de precios entre proveedores para el mismo producto |
-| SOURCE-02 | Integración pedido ↔ sourcing | Flujo presupuesto → solicitud de sourcing → pedido a proveedor |
-| MAY-08 | sobrePedido → SourcingRequest | Los ítems marcados "sobre pedido" en presupuesto generan solicitud de sourcing automática |
 
 ---
 

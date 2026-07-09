@@ -350,3 +350,47 @@ export type ExchangeRate = {
   date: string
   source: 'manual' | 'api'
 }
+
+// ─── SOURCE — Comparador de proveedores ───────────────────────────────────────
+
+export type SourcingStatus = 'draft' | 'quoting' | 'decided' | 'ordered' | 'closed'
+export type SourcingDestination = 'stock' | 'client'
+
+export interface SourcingRequest {
+  id?: number
+  status: SourcingStatus
+  notes?: string
+  chosenQuoteId?: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface SourcingLine {
+  id?: number
+  requestId: number
+  productId?: number
+  productName: string
+  brand: string
+  isFreeText: boolean
+  quantity: number
+  destination: SourcingDestination
+  customerId?: number
+  customerName?: string
+  expectedSalePricePYG?: number
+}
+
+export interface SupplierQuoteLineItem {
+  lineId: number
+  priceUSD: number
+}
+
+export interface SupplierQuote {
+  id?: number
+  requestId: number
+  supplierId: number
+  estimatedShippingPYG: number
+  exchangeRate: number
+  lineItems: SupplierQuoteLineItem[]
+  createdAt: string
+  updatedAt: string
+}

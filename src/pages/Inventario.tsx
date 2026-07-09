@@ -914,6 +914,11 @@ export function Inventario() {
                                       const isAgotado = remaining === 0
                                       const isParcial = remaining > 0 && remaining < entry.quantity
                                       const unit = entry.type === 'sealed' ? 'u.' : 'ml'
+                                      // Lote sellado agotado por conversión a ML abiertos (no por venta)
+                                      const isConvertedToOpen = isAgotado
+                                        && (entry.type === 'sealed' || entry.type === 'tester')
+                                        && p.type === 'decant_source'
+                                        && p.stockOpenML > 0
                                       const pct = totalEntriesQty > 0 ? entry.quantity / totalEntriesQty * 100 : 0
                                       const baseCostPYG = entry.costUSD * entry.exchangeRate
                                       const shippingPerUnit = Math.round(entry.costPYG - baseCostPYG)
@@ -924,7 +929,9 @@ export function Inventario() {
                                             {entry.quantity} {unit}
                                           </td>
                                           <td className="px-4 py-2.5 text-right">
-                                            {isAgotado ? (
+                                            {isConvertedToOpen ? (
+                                              <span className="text-xs bg-blue-50 text-blue-600 rounded-full px-2 py-0.5 font-medium">→ {p.stockOpenML} ml abiertos</span>
+                                            ) : isAgotado ? (
                                               <span className="text-xs bg-red-100 text-red-600 rounded-full px-2 py-0.5 font-medium">agotado</span>
                                             ) : isParcial ? (
                                               <span className="text-orange-600 font-semibold">{remaining} {unit}</span>
@@ -1017,7 +1024,21 @@ export function Inventario() {
           <Select label="Concentración" value={form.concentration} onChange={e => setForm(f => ({ ...f, concentration: e.target.value as Concentration }))} options={concentrations.map(c => ({ value: c, label: c }))} />
           <Select label="Familia olfativa" value={form.olfactiveFamily} onChange={e => setForm(f => ({ ...f, olfactiveFamily: e.target.value as OlfactiveFamily }))} options={families.map(f => ({ value: f.value, label: f.label }))} />
           <Input label="Tamaño (ml)" type="number" value={form.sizeML} onChange={e => setForm(f => ({ ...f, sizeML: e.target.value }))} />
-          <Select label="Tipo" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value as ProductType }))} options={[{ value: 'sealed', label: 'Sellado para venta' }, { value: 'tester', label: 'Tester (para venta)' }, { value: 'decant_source', label: 'Abierto para decants' }]} />
+          <Select label="Tipo" value={form.type} onChange={e => {
+            const newType = e.target.value as ProductType
+            const sizeML = parseFloat(form.sizeML) || 1
+            const oldIsDecant = form.type === 'decant_source'
+            const newIsDecant = newType === 'decant_source'
+            let newCostPYG = parseFloat(form.costPYG) || 0
+            if (!oldIsDecant && newIsDecant) {
+              // sellado/tester → decant_source: costo pasa de por-botella a por-ml
+              newCostPYG = Math.round(newCostPYG / sizeML)
+            } else if (oldIsDecant && !newIsDecant) {
+              // decant_source → sellado/tester: costo pasa de por-ml a por-botella
+              newCostPYG = Math.round(newCostPYG * sizeML)
+            }
+            setForm(f => ({ ...f, type: newType, costPYG: String(newCostPYG) }))
+          }} options={[{ value: 'sealed', label: 'Sellado para venta' }, { value: 'tester', label: 'Tester (para venta)' }, { value: 'decant_source', label: 'Abierto para decants' }]} />
           {form.type === 'decant_source' ? (
             <div className="col-span-2">
               <p className="text-sm font-medium text-gray-700 mb-2">Precios de venta por tamaño (Gs.)</p>

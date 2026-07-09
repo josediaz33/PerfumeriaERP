@@ -17,6 +17,7 @@ import { Presupuestos } from './pages/Presupuestos'
 import { Clientes } from './pages/Clientes'
 import { Utilidades } from './pages/Utilidades'
 import { Configuracion } from './pages/Configuracion'
+import { Sourcing } from './pages/Sourcing'
 
 export default function App() {
   const [pinState, setPinState] = useState<'loading' | 'locked' | 'unlocked'>('loading')
@@ -60,6 +61,7 @@ export default function App() {
           <Route path="/presupuestos" element={<Presupuestos />} />
           <Route path="/clientes" element={<Clientes />} />
           <Route path="/utilidades" element={<Utilidades />} />
+          <Route path="/sourcing" element={<Sourcing />} />
           <Route path="/configuracion" element={<Configuracion />} />
         </Route>
       </Routes>

@@ -15,6 +15,7 @@ import {
   Users,
   TrendingUp,
   Settings,
+  Scale,
 } from 'lucide-react'
 import { db } from '../../db/db'
 
@@ -29,6 +30,7 @@ const nav = [
   { to: '/logistica', label: 'Logística', icon: MapPin },
   { to: '/clientes', label: 'Clientes', icon: Users },
   { to: '/catalogo', label: 'Catálogo', icon: BookImage },
+  { to: '/sourcing', label: 'Comparador', icon: Scale },
   { to: '/presupuestos', label: 'Presupuestos', icon: FileText },
   { to: '/utilidades', label: 'Utilidades', icon: TrendingUp },
   { to: '/configuracion', label: 'Configuración', icon: Settings },
@@ -104,7 +106,7 @@ export function Sidebar() {
         ))}
       </nav>
       <div className="px-4 py-3 border-t border-gray-100">
-        <p className="text-xs text-gray-400 text-center">v2.0 — Fase 2</p>
+        <p className="text-xs text-gray-400 text-center">v2.1 — SOURCE</p>
       </div>
     </aside>
   )
