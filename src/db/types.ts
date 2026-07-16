@@ -219,6 +219,7 @@ export interface OrderItem {
   sizeML: number
   quantity: number
   unitPriceUSD: number
+  type?: ProductType
 }
 
 export interface Order {

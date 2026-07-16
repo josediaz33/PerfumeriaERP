@@ -134,6 +134,9 @@ costoPYGLinea = subtotalLineaUSD × exchangeRate + fleteProporcional
 | **Proveedores** | Eliminar un pedido recibido ahora revierte **todos** los movimientos de pago asociados (prepago + envío); antes solo revertía el primero por uso de `.first()` en lugar de `.toArray()` + loop |
 | **Inventario** | Al cambiar el tipo de producto entre sellado/tester ↔ decant\_source, el CPP se convierte automáticamente (÷ sizeML o × sizeML) para mantener la coherencia por-ml vs por-botella |
 | **Inventario** | Los lotes de un producto sellado cuya botella fue abierta para decants muestran "→ X ml abiertos" en lugar de "agotado", eliminando la inconsistencia visual |
+| **Proveedores** | Edición de pedidos pendientes/confirmados/en-camino antes de recibir: fecha, llegada estimada, cotización, nombre/marca/ml/cantidad/precio por ítem, notas |
+| **Proveedores** | Tipo de producto por ítem al crear pedido (Sellado / Tester / Para decants); chips de selección compactos con Sellado como default; autocomplete pre-llena el tipo del producto existente |
+| **Proveedores** | Al pre-crear y recepcionar, el tipo del ítem determina el stock y CPP correctos; productos de mismo nombre pero distinto tipo coexisten como entidades separadas |
 
 ---
 
@@ -266,8 +269,11 @@ Los precios visibles en el catálogo (app y HTML exportado) se toman de `product
 ### Proveedores
 - Recepción de pedidos: genera `StockEntry` por producto, distribuye el flete proporcionalmente, recalcula CPP
 - **Edición de pedidos recibidos**: modal con cambio de cotización, flete y precios por ítem; cascade completo a stock entries, CPP de productos, movimiento y saldo
+- **Edición de pedidos pendientes/en tránsito**: modal antes de recepcionar con campos de fecha, llegada estimada, cotización, nombre/marca/ml/cantidad/precio por ítem y notas; sin cascade (no hay stock ni movimientos aún)
+- **Tipo de producto por ítem**: al crear un pedido, cada línea tiene selector compacto Sellado / Tester / Para decants (default: Sellado); el autocomplete pre-llena el tipo del producto si ya existe; el tipo se guarda en `OrderItem.type` y se propaga a la pre-creación y a la recepción
+- **Búsqueda por nombre+marca+tipo**: al pre-crear y recepcionar, un producto con mismo nombre/marca pero distinto tipo crea una entidad separada — evita que un pedido "sellado" del mismo perfume vaya al stock ML del `decant_source`
 - **Pago anticipado**: al crear un pedido o desde la tabla de pedidos activos, se puede registrar el pago del total de productos antes de recepcionar. Al recepcionar un pedido prepagado, solo se descuenta el envío
-- **Pre-creación de productos**: al crear un pedido, los productos nuevos se crean en inventario con `stockSealed: 0` para poder usarlos en Logística antes de recepcionar
+- **Pre-creación de productos**: al crear un pedido, los productos nuevos se crean en inventario con `stockSealed: 0` (o `stockOpenML: 0` si son decants) para poder usarlos en Logística antes de recepcionar
 
 ### Presupuestos
 - **Tipos de línea**: Sellado, Tester, Decant (tamaños 3/5/10/30ml), Parcial, Personalizado

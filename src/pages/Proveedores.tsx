@@ -2,7 +2,7 @@ import { useState, Fragment } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { Plus, Truck, Globe, DollarSign, Package, ChevronDown, ChevronUp, Trash2, X as XIcon, Edit2 } from 'lucide-react'
 import { db } from '../db/db'
-import type { Order, OrderStatus } from '../db/types'
+import type { Order, OrderStatus, ProductType } from '../db/types'
 import { fmtPYG, fmtUSD, fmtDate, today, nowISO } from '../lib/format'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
@@ -51,6 +51,16 @@ export function Proveedores() {
     items: [] as { productName: string; brand: string; sizeML: number; quantity: number; unitPriceUSD: string }[],
   })
 
+  // Edit pending/in-transit order modal
+  const [editPendingOrder, setEditPendingOrder] = useState<Order | null>(null)
+  const [editPendingForm, setEditPendingForm] = useState({
+    orderDate: '',
+    estimatedArrival: '',
+    exchangeRate: '7500',
+    notes: '',
+    items: [] as { productName: string; brand: string; sizeML: string; quantity: string; unitPriceUSD: string; type: ProductType }[],
+  })
+
   const [sForm, setSForm] = useState({
     name: '', country: 'Paraguay', website: '', paymentTerms: '', estimatedDeliveryDays: '7', notes: '',
   })
@@ -58,7 +68,7 @@ export function Proveedores() {
     supplierId: '', exchangeRate: '7500', orderDate: today(), estimatedArrival: '', notes: '',
     localCurrency: false,
     registerPayment: false, paymentAccountId: '',
-    items: [{ productName: '', brand: '', sizeML: '100', quantity: '1', unitPriceUSD: '' }],
+    items: [{ productName: '', brand: '', sizeML: '100', quantity: '1', unitPriceUSD: '', type: 'sealed' as ProductType }],
   })
   const [activeItemSearch, setActiveItemSearch] = useState<number | null>(null)
 
@@ -92,6 +102,7 @@ export function Proveedores() {
       items: items.map(i => ({
         productName: i.productName, brand: i.brand, sizeML: parseFloat(i.sizeML),
         quantity: parseInt(i.quantity), unitPriceUSD: parseFloat(i.unitPriceUSD),
+        type: i.type,
       })),
       totalUSD, exchangeRate, totalPYG,
       localCurrency: isLocal || undefined,
@@ -106,9 +117,11 @@ export function Proveedores() {
       for (const item of items) {
         const exists = products.find(
           p => p.name.toLowerCase() === item.productName.toLowerCase() &&
-               p.brand.toLowerCase() === item.brand.toLowerCase()
+               p.brand.toLowerCase() === item.brand.toLowerCase() &&
+               (item.type ? p.type === item.type : true)
         )
         if (!exists) {
+          const itemType = item.type ?? 'sealed'
           await db.products.add({
             name: item.productName, brand: item.brand,
             olfactiveFamily: 'other', concentration: 'EDP',
@@ -118,7 +131,7 @@ export function Proveedores() {
             costPYG: Math.round(parseFloat(item.unitPriceUSD) * exchangeRate),
             sellingPricePYG: 0,
             stockSealed: 0, stockOpenML: 0,
-            minStock: 1, type: 'sealed',
+            minStock: 1, type: itemType,
             createdAt: now, updatedAt: now,
           })
         }
@@ -146,7 +159,7 @@ export function Proveedores() {
     setOForm({
       supplierId: '', exchangeRate: '7500', orderDate: today(), estimatedArrival: '', notes: '',
       localCurrency: false, registerPayment: false, paymentAccountId: '',
-      items: [{ productName: '', brand: '', sizeML: '100', quantity: '1', unitPriceUSD: '' }],
+      items: [{ productName: '', brand: '', sizeML: '100', quantity: '1', unitPriceUSD: '', type: 'sealed' as ProductType }],
     })
     setShowOrder(false)
   }
@@ -207,10 +220,12 @@ export function Proveedores() {
       for (const item of order.items) {
         const existing = products.find(
           p => p.name.toLowerCase() === item.productName.toLowerCase() &&
-               p.brand.toLowerCase() === item.brand.toLowerCase()
+               p.brand.toLowerCase() === item.brand.toLowerCase() &&
+               (item.type ? p.type === item.type : true)
         )
 
-        const isDecant = existing?.type === 'decant_source'
+        const itemType = item.type ?? 'sealed'
+        const isDecant = existing ? existing.type === 'decant_source' : itemType === 'decant_source'
         const sizeML = isDecant && existing?.sizeML ? existing.sizeML : item.sizeML
 
         // For decant_source: qty = total ML, costUSD = per ML
@@ -248,17 +263,18 @@ export function Proveedores() {
           const productId = await db.products.add({
             name: item.productName, brand: item.brand, olfactiveFamily: 'other',
             concentration: 'EDP', sizeML: item.sizeML,
-            costUSD: item.unitPriceUSD, exchangeRateUsed: exchangeRate,
+            costUSD, exchangeRateUsed: exchangeRate,
             costPYG: batchCostPYG, sellingPricePYG: 0,
-            stockSealed: item.quantity, stockOpenML: 0,
-            minStock: 1, type: 'sealed', createdAt: now, updatedAt: now,
+            stockSealed: isDecant ? 0 : qty,
+            stockOpenML: isDecant ? qty : 0,
+            minStock: 1, type: itemType, createdAt: now, updatedAt: now,
           })
           await db.stockEntries.add({
             productId: productId as number, supplierId: order.supplierId,
             orderId: receivingOrderId, shipmentBatchId: batchId as number,
-            quantity: item.quantity, quantityRemaining: item.quantity,
-            costUSD: item.unitPriceUSD, exchangeRate,
-            costPYG: batchCostPYG, type: 'sealed', date: receiveDate, createdAt: now,
+            quantity: qty, quantityRemaining: qty,
+            costUSD, exchangeRate,
+            costPYG: batchCostPYG, type: itemType, date: receiveDate, createdAt: now,
           })
         }
       }
@@ -287,6 +303,50 @@ export function Proveedores() {
 
     setShowReceive(false)
     setReceivingOrderId(null)
+  }
+
+  function openEditPendingOrder(order: Order) {
+    setEditPendingOrder(order)
+    setEditPendingForm({
+      orderDate: order.orderDate,
+      estimatedArrival: order.estimatedArrival ?? '',
+      exchangeRate: String(order.exchangeRate),
+      notes: order.notes ?? '',
+      items: order.items.map(i => ({
+        productName: i.productName,
+        brand: i.brand,
+        sizeML: String(i.sizeML),
+        quantity: String(i.quantity),
+        unitPriceUSD: String(i.unitPriceUSD),
+        type: (i.type ?? 'sealed') as ProductType,
+      })),
+    })
+  }
+
+  async function handleEditPendingOrder() {
+    if (!editPendingOrder) return
+    const isLocal = editPendingOrder.localCurrency ?? false
+    const newRate = isLocal ? 1 : (parseFloat(editPendingForm.exchangeRate) || 7500)
+    const newItems = editPendingForm.items.map((fi, idx) => ({
+      ...editPendingOrder.items[idx],
+      productName: fi.productName,
+      brand: fi.brand,
+      sizeML: parseFloat(fi.sizeML) || 0,
+      quantity: parseInt(fi.quantity) || 1,
+      unitPriceUSD: parseFloat(fi.unitPriceUSD) || 0,
+      type: fi.type,
+    }))
+    const newTotalUSD = newItems.reduce((s, i) => s + i.unitPriceUSD * i.quantity, 0)
+    await db.orders.update(editPendingOrder.id!, {
+      orderDate: editPendingForm.orderDate,
+      estimatedArrival: editPendingForm.estimatedArrival || undefined,
+      exchangeRate: newRate,
+      items: newItems,
+      totalUSD: newTotalUSD,
+      totalPYG: Math.round(newTotalUSD * newRate),
+      notes: editPendingForm.notes || undefined,
+    })
+    setEditPendingOrder(null)
   }
 
   function openEditReceivedOrder(order: Order) {
@@ -591,6 +651,15 @@ export function Proveedores() {
                                 Recibir
                               </Button>
                             )}
+                            {(o.status === 'pending' || o.status === 'confirmed' || o.status === 'shipped') && (
+                              <button
+                                onClick={() => openEditPendingOrder(o)}
+                                className="p-1.5 rounded text-gray-400 hover:text-violet-600 hover:bg-violet-50 transition-colors"
+                                title="Editar pedido"
+                              >
+                                <Edit2 size={14} />
+                              </button>
+                            )}
                             {o.status === 'received' && (
                               <button
                                 onClick={() => openEditReceivedOrder(o)}
@@ -730,7 +799,8 @@ export function Proveedores() {
           <div>
             <p className="text-sm font-medium text-gray-700 mb-2">Productos del pedido</p>
             {oForm.items.map((item, i) => (
-              <div key={i} className="grid grid-cols-[1fr_1fr_80px_72px_100px_28px] gap-2 mb-2 items-start">
+              <div key={i} className="mb-3">
+              <div className="grid grid-cols-[1fr_1fr_80px_72px_100px_28px] gap-2 items-start">
                 <Input placeholder="Marca" value={item.brand} onChange={e => setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, brand: e.target.value } : x) }))} />
                 {/* Nombre con autocomplete */}
                 <div className="relative">
@@ -759,7 +829,7 @@ export function Proveedores() {
                             key={p.id}
                             type="button"
                             onMouseDown={() => {
-                              setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, productName: p.name, brand: p.brand, sizeML: String(p.sizeML) } : x) }))
+                              setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, productName: p.name, brand: p.brand, sizeML: String(p.sizeML), type: p.type } : x) }))
                               setActiveItemSearch(null)
                             }}
                             className="w-full flex items-center gap-2 px-3 py-2 hover:bg-violet-50 text-left text-sm border-b border-gray-50 last:border-0"
@@ -784,8 +854,22 @@ export function Proveedores() {
                   <XIcon size={14} />
                 </button>
               </div>
+              <div className="flex items-center gap-1 mt-1.5 pl-0.5">
+                <span className="text-xs text-gray-400 mr-0.5">Tipo:</span>
+                {(['sealed', 'tester', 'decant_source'] as const).map(t => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, type: t } : x) }))}
+                    className={`text-xs px-2 py-0.5 rounded-full border transition-all ${item.type === t ? 'bg-violet-100 border-violet-300 text-violet-700 font-medium' : 'border-gray-200 text-gray-400 hover:border-gray-300 hover:text-gray-600'}`}
+                  >
+                    {t === 'sealed' ? 'Sellado' : t === 'tester' ? 'Tester' : 'Para decants'}
+                  </button>
+                ))}
+              </div>
+              </div>
             ))}
-            <Button variant="ghost" size="sm" onClick={() => setOForm(f => ({ ...f, items: [...f.items, { productName: '', brand: '', sizeML: '100', quantity: '1', unitPriceUSD: '' }] }))}>
+            <Button variant="ghost" size="sm" onClick={() => setOForm(f => ({ ...f, items: [...f.items, { productName: '', brand: '', sizeML: '100', quantity: '1', unitPriceUSD: '', type: 'sealed' as ProductType }] }))}>
               + Agregar línea
             </Button>
           </div>
@@ -1002,6 +1086,142 @@ export function Proveedores() {
             <div className="flex gap-2 pt-2">
               <Button variant="secondary" className="flex-1" onClick={() => { setShowPayOrder(false); setPayingOrder(null) }}>Cancelar</Button>
               <Button className="flex-1" onClick={handlePayOrder} disabled={!payOrderAccountId}>Registrar pago</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Modal editar pedido pendiente / en tránsito */}
+      <Modal isOpen={!!editPendingOrder} onClose={() => setEditPendingOrder(null)} title="Editar pedido" size="lg">
+        {editPendingOrder && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Fecha del pedido"
+                type="date"
+                value={editPendingForm.orderDate}
+                onChange={e => setEditPendingForm(f => ({ ...f, orderDate: e.target.value }))}
+              />
+              <Input
+                label="Llegada estimada"
+                type="date"
+                value={editPendingForm.estimatedArrival}
+                onChange={e => setEditPendingForm(f => ({ ...f, estimatedArrival: e.target.value }))}
+              />
+            </div>
+
+            {!editPendingOrder.localCurrency && (
+              <Input
+                label="Cotización USD/PYG"
+                type="number"
+                value={editPendingForm.exchangeRate}
+                onChange={e => setEditPendingForm(f => ({ ...f, exchangeRate: e.target.value }))}
+              />
+            )}
+
+            <div>
+              <p className="text-sm font-medium text-gray-700 mb-2">Productos</p>
+              <div className="space-y-2">
+                {editPendingForm.items.map((item, i) => (
+                  <div key={i} className="bg-gray-50 rounded-lg px-3 py-2.5 space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="text"
+                        placeholder="Nombre"
+                        className="text-sm border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        value={item.productName}
+                        onChange={e => setEditPendingForm(f => ({
+                          ...f, items: f.items.map((x, j) => j === i ? { ...x, productName: e.target.value } : x),
+                        }))}
+                      />
+                      <input
+                        type="text"
+                        placeholder="Marca"
+                        className="text-sm border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        value={item.brand}
+                        onChange={e => setEditPendingForm(f => ({
+                          ...f, items: f.items.map((x, j) => j === i ? { ...x, brand: e.target.value } : x),
+                        }))}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        placeholder="ml"
+                        className="w-16 text-sm border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        value={item.sizeML}
+                        onChange={e => setEditPendingForm(f => ({
+                          ...f, items: f.items.map((x, j) => j === i ? { ...x, sizeML: e.target.value } : x),
+                        }))}
+                      />
+                      <span className="text-xs text-gray-400">ml</span>
+                      <input
+                        type="number"
+                        placeholder="Cant."
+                        className="w-16 text-sm border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        value={item.quantity}
+                        onChange={e => setEditPendingForm(f => ({
+                          ...f, items: f.items.map((x, j) => j === i ? { ...x, quantity: e.target.value } : x),
+                        }))}
+                      />
+                      <span className="text-xs text-gray-400">u.</span>
+                      <div className="flex-1" />
+                      <input
+                        type="number"
+                        placeholder="Precio"
+                        className="w-24 text-right text-sm border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        value={item.unitPriceUSD}
+                        onChange={e => setEditPendingForm(f => ({
+                          ...f, items: f.items.map((x, j) => j === i ? { ...x, unitPriceUSD: e.target.value } : x),
+                        }))}
+                      />
+                      <span className="text-xs text-gray-400">{editPendingOrder.localCurrency ? 'Gs.' : 'USD'} /u.</span>
+                    </div>
+                    <div className="flex items-center gap-1 mt-1.5">
+                      <span className="text-xs text-gray-400 mr-0.5">Tipo:</span>
+                      {(['sealed', 'tester', 'decant_source'] as const).map(t => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => setEditPendingForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, type: t } : x) }))}
+                          className={`text-xs px-2 py-0.5 rounded-full border transition-all ${item.type === t ? 'bg-violet-100 border-violet-300 text-violet-700 font-medium' : 'border-gray-200 text-gray-400 hover:border-gray-300 hover:text-gray-600'}`}
+                        >
+                          {t === 'sealed' ? 'Sellado' : t === 'tester' ? 'Tester' : 'Para decants'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <Textarea
+              label="Notas"
+              rows={2}
+              value={editPendingForm.notes}
+              onChange={e => setEditPendingForm(f => ({ ...f, notes: e.target.value }))}
+              placeholder="Opcional"
+            />
+
+            {/* Preview total */}
+            {(() => {
+              const rate = editPendingOrder.localCurrency ? 1 : (parseFloat(editPendingForm.exchangeRate) || 7500)
+              const newTotalUSD = editPendingForm.items.reduce((s, i) => s + (parseFloat(i.unitPriceUSD) || 0) * (parseInt(i.quantity) || 1), 0)
+              const newTotalPYG = Math.round(newTotalUSD * rate)
+              return (
+                <div className="bg-gray-50 rounded-lg px-4 py-3 text-sm flex justify-between">
+                  <span className="text-gray-500">Total estimado</span>
+                  <span className="font-bold text-gray-900">
+                    {!editPendingOrder.localCurrency && <span className="text-gray-400 mr-2">{fmtUSD(newTotalUSD)}</span>}
+                    {fmtPYG(newTotalPYG)}
+                  </span>
+                </div>
+              )
+            })()}
+
+            <div className="flex gap-2 pt-2">
+              <Button variant="secondary" className="flex-1" onClick={() => setEditPendingOrder(null)}>Cancelar</Button>
+              <Button className="flex-1" onClick={handleEditPendingOrder}>Guardar cambios</Button>
             </div>
           </div>
         )}
