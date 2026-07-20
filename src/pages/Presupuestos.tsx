@@ -284,10 +284,12 @@ export function Presupuestos() {
       unitPrice: Math.round(i.unitPrice * (1 - (i.descuentoPct ?? 0) / 100) * globalDiscFactor),
       sobrePedido: i.sobrePedido || undefined,
     }))
+    const sobrePedidoItems = budget.items.filter(i => i.sobrePedido)
     const skipped = budget.items.length - validItems.length
     const now = nowISO()
     const customerId = await upsertCustomer(budget.customerName, budget.customerPhone ?? '')
-    await db.transaction('rw', db.localOrders, db.budgets, async () => {
+
+    await db.transaction('rw', [db.localOrders, db.budgets, db.sourcingRequests, db.sourcingLines], async () => {
       const orderId = await db.localOrders.add({
         customerId,
         customerName: budget.customerName,
@@ -307,8 +309,37 @@ export function Presupuestos() {
         updatedAt: now,
       })
       await db.budgets.update(budget.id!, { localOrderId: orderId as number, updatedAt: now })
+
+      // MAY-08: generar SourcingRequest para ítems marcados "sobre pedido"
+      if (sobrePedidoItems.length > 0) {
+        const requestId = await db.sourcingRequests.add({
+          status: 'quoting',
+          notes: `Sobre pedido — ${budget.customerName}`,
+          createdAt: now,
+          updatedAt: now,
+        })
+        for (const item of sobrePedidoItems) {
+          const prod = item.productId > 0 ? products.find(p => p.id === item.productId) : null
+          await db.sourcingLines.add({
+            requestId: requestId as number,
+            productId: item.productId > 0 ? item.productId : undefined,
+            productName: prod?.name ?? item.description,
+            brand: prod?.brand ?? '',
+            isFreeText: !item.productId || item.productId === 0,
+            quantity: item.quantity,
+            destination: 'client',
+            customerId,
+            customerName: budget.customerName,
+            expectedSalePricePYG: Math.round(item.unitPrice * (1 - (item.descuentoPct ?? 0) / 100) * globalDiscFactor),
+          })
+        }
+      }
     })
-    if (skipped > 0) alert(`Pedido creado. ${skipped} ítem${skipped > 1 ? 's' : ''} personalizado${skipped > 1 ? 's' : ''} sin producto fue${skipped > 1 ? 'ron' : ''} omitido${skipped > 1 ? 's' : ''}.`)
+
+    const msgs: string[] = []
+    if (skipped > 0) msgs.push(`${skipped} ítem${skipped > 1 ? 's' : ''} personalizado${skipped > 1 ? 's' : ''} sin producto omitido${skipped > 1 ? 's' : ''}.`)
+    if (sobrePedidoItems.length > 0) msgs.push(`Se creó una solicitud de cotización en el Comparador con ${sobrePedidoItems.length} ítem${sobrePedidoItems.length > 1 ? 's' : ''} sobre pedido.`)
+    if (msgs.length > 0) alert('Pedido creado.\n\n' + msgs.join('\n'))
     navigate('/logistica')
   }
 

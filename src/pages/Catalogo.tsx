@@ -19,6 +19,17 @@ const families: { value: OlfactiveFamily; label: string }[] = [
 
 const familyLabel = (f: OlfactiveFamily) => families.find(x => x.value === f)?.label ?? f
 
+function ImagePlaceholder({ size = 48 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+      stroke="#c9bfaf" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+      <path d="m21 15-5-5L5 21" />
+    </svg>
+  )
+}
+
 function escHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
@@ -34,7 +45,7 @@ function CatalogThumb({ imageId }: { imageId: string }) {
   }, [imageId])
   if (!url) return (
     <div className="w-full h-full flex items-center justify-center">
-      <span className="text-5xl select-none">🌸</span>
+      <ImagePlaceholder size={48} />
     </div>
   )
   return <img src={url} alt="" className="w-full h-full object-cover" />
@@ -74,7 +85,7 @@ function ProductModal({ product, onClose }: {
             <img src={imgUrl} alt={product.name} className="w-full h-full object-cover" />
           ) : (
             <div className="w-full h-full flex items-center justify-center">
-              <span className="text-8xl select-none">🌸</span>
+              <ImagePlaceholder size={80} />
             </div>
           )}
           <button
@@ -281,7 +292,7 @@ export function Catalogo() {
 
     // Generar tarjeta + modal por producto
     const productItems = await Promise.all(filtered.map(async p => {
-      let imgTag = '<span class="ph">🌸</span>'
+      let imgTag = '<div class="ph"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#c9bfaf" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></div>'
       if (p.imageIds?.[0]) {
         const img = await db.images.get(p.imageIds[0])
         if (img) {
@@ -434,7 +445,7 @@ export function Catalogo() {
       '.ci{aspect-ratio:1;background:linear-gradient(135deg,#faf7ef,#ece8dd);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0}',
       '.ci img{width:100%;height:100%;object-fit:cover;transition:transform .3s}',
       'a.card:hover .ci img{transform:scale(1.04)}',
-      '.ph{font-size:52px;user-select:none}',
+      '.ph{display:flex;align-items:center;justify-content:center;width:100%;height:100%}',
       '.cb{padding:12px;display:flex;flex-direction:column;flex:1}',
       '.badge{display:inline-block;font-size:10px;font-weight:700;padding:3px 8px;border-radius:6px;margin-bottom:7px;text-transform:uppercase;letter-spacing:.4px}',
       '.bs{background:#dbeafe;color:#1e40af}.bt{background:#fef3c7;color:#92400e}.bd{background:#ede9fe;color:#5b21b6}.bf{background:#dcfce7;color:#14532d}',
@@ -528,6 +539,7 @@ export function Catalogo() {
     const js = [
       'var PD=' + JSON.stringify(pdData) + ';',
       'var BP=' + JSON.stringify(waPhone) + ';',
+      'var BN=' + JSON.stringify(businessName) + ';',
       'var cart=[];var selSz={};var selQty={};',
 
       // Búsqueda
@@ -624,13 +636,12 @@ export function Catalogo() {
       'if(cart.length===0)return;',
       'var lines=cart.map(function(c){',
       'var sz=c.ml?c.ml+"ml":"Sellado";',
-      'var sub="Gs. "+(c.price*c.qty).toLocaleString("es-PY");',
-      'return "\\u2022 "+c.name+" ("+c.brand+") \\u2014 "+sz+" \\u00d7 "+c.qty+" = "+sub;',
+      'return "\\u2022 "+c.brand+" \\u2014 "+c.name+" | "+sz+" | \\u00d7"+c.qty+" \\u2192 Gs. "+(c.price*c.qty).toLocaleString("es-PY");',
       '});',
       'var total=cart.reduce(function(s,c){return s+c.price*c.qty;},0);',
-      'var msg="\\u00a1Hola! Me gustar\\u00eda realizar el siguiente pedido:\\n\\n"+lines.join("\\n")+',
-      '"\\n\\n*Total estimado: Gs. "+total.toLocaleString("es-PY")+"*"+',
-      '"\\n\\n_Quedo a la espera de confirmar disponibilidad_ \\ud83c\\udf38";',
+      'var msg="*Pedido \\u2014 "+BN+"*\\n\\n"+lines.join("\\n")+',
+      '"\\n\\n*Total: Gs. "+total.toLocaleString("es-PY")+"*"+',
+      '"\\n\\nAguardo confirmaci\\u00f3n de disponibilidad y datos de entrega.";',
       'var url=BP?"https://wa.me/"+BP+"?text="+encodeURIComponent(msg):"https://wa.me/?text="+encodeURIComponent(msg);',
       'window.open(url,"_blank");}',
 
@@ -909,7 +920,7 @@ export function Catalogo() {
                   <CatalogThumb imageId={p.imageIds[0]} />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center">
-                    <span className="text-5xl select-none">🌸</span>
+                    <ImagePlaceholder size={48} />
                   </div>
                 )}
               </div>
