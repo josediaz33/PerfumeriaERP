@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { Plus, Wallet, Building2, Smartphone, CreditCard, ArrowLeftRight, Trash2, Edit2, History } from 'lucide-react'
 import { db } from '../db/db'
-import type { AccountType, Account } from '../db/types'
+import type { AccountType, Account, Movement } from '../db/types'
 import { fmtPYG, fmtDate, today, nowISO } from '../lib/format'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
@@ -59,7 +59,11 @@ export function Cuentas() {
 
   // ── Transferencia ──
   const [showTransfer, setShowTransfer] = useState(false)
-  const [transfer, setTransfer] = useState({ fromId: '', toId: '', amount: '', description: '' })
+  const [transfer, setTransfer] = useState({ fromId: '', toId: '', amount: '', description: '', date: '' })
+
+  // ── Editar transferencia ──
+  const [editTransfer, setEditTransfer] = useState<Movement | null>(null)
+  const [editTransferForm, setEditTransferForm] = useState({ date: '', description: '' })
 
   const totalBalance = accounts.reduce((sum, a) => sum + a.balance, 0)
 
@@ -147,7 +151,7 @@ export function Cuentas() {
     const amount = parseFloat(transfer.amount)
     if (!from || !to || !amount || from === to) return
     const now = nowISO()
-    const date = now.split('T')[0]
+    const date = transfer.date || now.split('T')[0]
 
     await db.transaction('rw', db.accounts, db.movements, async () => {
       await db.accounts.where('id').equals(from).modify(a => { a.balance -= amount })
@@ -163,8 +167,23 @@ export function Cuentas() {
         createdAt: now,
       })
     })
-    setTransfer({ fromId: '', toId: '', amount: '', description: '' })
+    setTransfer({ fromId: '', toId: '', amount: '', description: '', date: '' })
     setShowTransfer(false)
+  }
+
+  // ── Editar transferencia ──
+  function openEditTransfer(m: Movement) {
+    setEditTransfer(m)
+    setEditTransferForm({ date: m.date, description: m.description })
+  }
+
+  async function handleEditTransfer() {
+    if (!editTransfer) return
+    await db.movements.update(editTransfer.id!, {
+      date: editTransferForm.date,
+      description: editTransferForm.description,
+    })
+    setEditTransfer(null)
   }
 
   // ── Eliminar cuenta ──
@@ -417,6 +436,7 @@ export function Cuentas() {
                         <th className="text-left px-4 py-2.5 text-gray-500 font-medium">Fecha</th>
                         <th className="text-left px-4 py-2.5 text-gray-500 font-medium">Descripción</th>
                         <th className="text-right px-4 py-2.5 text-gray-500 font-medium">Monto</th>
+                        <th className="w-8" />
                       </tr>
                     </thead>
                     <tbody>
@@ -429,6 +449,17 @@ export function Cuentas() {
                             <td className="px-4 py-2.5 text-gray-700">{m.description}</td>
                             <td className={`px-4 py-2.5 text-right font-semibold whitespace-nowrap ${isIncoming ? 'text-green-600' : isOutgoing ? 'text-red-600' : 'text-violet-600'}`}>
                               {isIncoming ? '+' : isOutgoing ? '−' : '↔'} {fmtPYG(m.amount)}
+                            </td>
+                            <td className="pr-2">
+                              {m.type === 'transfer' && (
+                                <button
+                                  onClick={() => openEditTransfer(m)}
+                                  className="p-1 rounded text-gray-300 hover:text-violet-600 hover:bg-violet-50 transition-all cursor-pointer"
+                                  title="Editar transferencia"
+                                >
+                                  <Edit2 size={13} />
+                                </button>
+                              )}
                             </td>
                           </tr>
                         )
@@ -464,6 +495,12 @@ export function Cuentas() {
             onChange={e => setTransfer(t => ({ ...t, amount: e.target.value }))}
           />
           <Input
+            label="Fecha"
+            type="date"
+            value={transfer.date}
+            onChange={e => setTransfer(t => ({ ...t, date: e.target.value }))}
+          />
+          <Input
             label="Descripción (opcional)"
             value={transfer.description}
             onChange={e => setTransfer(t => ({ ...t, description: e.target.value }))}
@@ -473,6 +510,34 @@ export function Cuentas() {
             <Button className="flex-1" onClick={handleTransfer}>Transferir</Button>
           </div>
         </div>
+      </Modal>
+
+      {/* Modal editar transferencia */}
+      <Modal isOpen={!!editTransfer} onClose={() => setEditTransfer(null)} title="Editar transferencia">
+        {editTransfer && (
+          <div className="space-y-4">
+            <div className="bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-500">
+              Monto: <span className="font-semibold text-gray-900">{fmtPYG(editTransfer.amount)}</span>
+              <span className="mx-2 text-gray-300">·</span>
+              Solo se puede modificar la fecha y descripción.
+            </div>
+            <Input
+              label="Fecha"
+              type="date"
+              value={editTransferForm.date}
+              onChange={e => setEditTransferForm(f => ({ ...f, date: e.target.value }))}
+            />
+            <Input
+              label="Descripción"
+              value={editTransferForm.description}
+              onChange={e => setEditTransferForm(f => ({ ...f, description: e.target.value }))}
+            />
+            <div className="flex gap-2 pt-2">
+              <Button variant="secondary" className="flex-1" onClick={() => setEditTransfer(null)}>Cancelar</Button>
+              <Button className="flex-1" onClick={handleEditTransfer}>Guardar</Button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   )

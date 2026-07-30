@@ -66,7 +66,7 @@ export function Logistica() {
     shippingCost: '0', shippingPaidBy: 'customer' as 'customer' | 'business',
     orderDate: today(), estimatedDelivery: '', notes: '',
     isPreOrder: false,
-    items: [{ productId: '0', type: 'sealed' as 'sealed' | 'tester' | 'decant' | 'partial' | 'supply', sizeML: '5', quantity: '1', unitPrice: '' }],
+    items: [{ productId: '0', supplyId: '', type: 'sealed' as 'sealed' | 'tester' | 'decant' | 'partial' | 'supply', sizeML: '5', quantity: '1', unitPrice: '' }],
     supplies: [] as { supplyId: string; quantity: string }[],
   }
 
@@ -95,8 +95,9 @@ export function Logistica() {
       notes: order.notes ?? '',
       isPreOrder: order.isPreOrder ?? false,
       items: order.items.map(i => ({
-        productId: String(i.productId), type: i.type,
-        sizeML: String(i.sizeML ?? 5), quantity: String(i.quantity), unitPrice: String(i.unitPrice),
+        productId: String(i.productId), supplyId: String(i.supplyId ?? ''),
+        type: i.type, sizeML: String(i.sizeML ?? 5),
+        quantity: String(i.quantity), unitPrice: String(i.unitPrice),
       })),
       supplies: order.supplies.map(s => ({ supplyId: String(s.supplyId), quantity: String(s.quantity) })),
     })
@@ -182,6 +183,7 @@ export function Logistica() {
       customerName: form.customerName, customerPhone: form.customerPhone, customerAddress: form.customerAddress,
       items: validItems.map(i => ({
         productId: parseInt(i.productId), type: i.type,
+        supplyId: i.type === 'supply' && i.supplyId ? parseInt(i.supplyId) : undefined,
         sizeML: (i.type === 'decant' || i.type === 'partial') ? parseInt(i.sizeML) : undefined,
         quantity: parseInt(i.quantity), unitPrice: parseFloat(i.unitPrice),
       })),
@@ -737,22 +739,35 @@ export function Logistica() {
           </div>
 
           <div>
-            <p className="text-sm font-medium text-gray-700 mb-2">Productos</p>
+            <p className="text-sm font-medium text-gray-700 mb-2">Productos e insumos</p>
             {form.items.map((item, i) => (
               <div key={i} className="flex items-center gap-2 mb-2">
                 <div className="grid grid-cols-5 gap-2 flex-1">
-                  <Select value={item.productId} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, productId: e.target.value } : x) }))}
-                    options={[{ value: '0', label: 'Producto...' }, ...(
-                      item.type === 'sealed'
-                        ? products.filter(p => p.type === 'sealed')
-                        : item.type === 'tester'
-                          ? products.filter(p => p.type === 'tester')
-                          : item.type === 'decant' || item.type === 'partial'
-                            ? products.filter(p => p.stockOpenML > 0)
-                            : products
-                    ).map(p => ({ value: String(p.id), label: (item.type === 'decant' || item.type === 'partial') ? `${p.brand} — ${p.name} (${p.stockOpenML}ml)` : `${p.brand} — ${p.name}` }))]} />
-                  <Select value={item.type} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, type: e.target.value as any, productId: '0' } : x) }))}
-                    options={[{ value: 'sealed', label: 'Sellado' }, { value: 'tester', label: 'Tester' }, { value: 'decant', label: 'Decant' }, { value: 'partial', label: 'Parcial' }]} />
+                  {item.type === 'supply' ? (
+                    <Select
+                      value={item.supplyId}
+                      onChange={e => {
+                        const sup = supplies.find(s => String(s.id) === e.target.value)
+                        setForm(f => ({ ...f, items: f.items.map((x, j) => j === i
+                          ? { ...x, supplyId: e.target.value, unitPrice: sup ? String(sup.costPYG) : x.unitPrice }
+                          : x) }))
+                      }}
+                      options={[{ value: '', label: 'Insumo...' }, ...supplies.map(s => ({ value: String(s.id), label: `${s.name} (stock: ${s.stock})` }))]}
+                    />
+                  ) : (
+                    <Select value={item.productId} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, productId: e.target.value } : x) }))}
+                      options={[{ value: '0', label: 'Producto...' }, ...(
+                        item.type === 'sealed'
+                          ? products.filter(p => p.type === 'sealed')
+                          : item.type === 'tester'
+                            ? products.filter(p => p.type === 'tester')
+                            : item.type === 'decant' || item.type === 'partial'
+                              ? products.filter(p => p.stockOpenML > 0)
+                              : products
+                      ).map(p => ({ value: String(p.id), label: (item.type === 'decant' || item.type === 'partial') ? `${p.brand} — ${p.name} (${p.stockOpenML}ml)` : `${p.brand} — ${p.name}` }))]} />
+                  )}
+                  <Select value={item.type} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, type: e.target.value as any, productId: '0', supplyId: '' } : x) }))}
+                    options={[{ value: 'sealed', label: 'Sellado' }, { value: 'tester', label: 'Tester' }, { value: 'decant', label: 'Decant' }, { value: 'partial', label: 'Parcial' }, { value: 'supply', label: 'Insumo' }]} />
                   {item.type === 'decant' && (
                     <Select value={item.sizeML} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, sizeML: e.target.value } : x) }))}
                       options={[3, 5, 10, 30].map(s => ({ value: String(s), label: `${s}ml` }))} />
@@ -768,7 +783,7 @@ export function Logistica() {
                 </button>
               </div>
             ))}
-            <Button variant="ghost" size="sm" onClick={() => setForm(f => ({ ...f, items: [...f.items, { productId: '0', type: 'sealed', sizeML: '5', quantity: '1', unitPrice: '' }] }))}>
+            <Button variant="ghost" size="sm" onClick={() => setForm(f => ({ ...f, items: [...f.items, { productId: '0', supplyId: '', type: 'sealed' as const, sizeML: '5', quantity: '1', unitPrice: '' }] }))}>
               + Agregar producto
             </Button>
           </div>

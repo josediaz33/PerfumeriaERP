@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { Plus, Droplets, FlaskConical, Package, Edit2, Trash2, AlertTriangle } from 'lucide-react'
+import { Plus, Droplets, FlaskConical, Package, Edit2, Trash2, AlertTriangle, ShoppingCart } from 'lucide-react'
 import { db } from '../db/db'
 import type { DecantBatch, Supply, SupplyType } from '../db/types'
 import { fmtPYG, fmtDate, today, nowISO } from '../lib/format'
@@ -28,9 +28,17 @@ export function Decants() {
   const allProducts = useLiveQuery(() => db.products.filter(p => p.stockOpenML > 0).toArray()) ?? []
   const supplies = useLiveQuery(() => db.supplies.toArray()) ?? []
   const batches = useLiveQuery(() => db.decantBatches.orderBy('date').reverse().toArray()) ?? []
+  const accounts = useLiveQuery(() => db.accounts.filter(a => a.isActive !== false).toArray()) ?? []
 
   const [showProduce, setShowProduce] = useState(false)
   const [showSupply, setShowSupply] = useState(false)
+
+  // ── Compra de insumos ──
+  const [showPurchase, setShowPurchase] = useState(false)
+  const [purchaseLines, setPurchaseLines] = useState<{ supplyId: number; qty: string; unitCost: string }[]>([])
+  const [purchaseAccountId, setPurchaseAccountId] = useState('')
+  const [purchaseDate, setPurchaseDate] = useState(today())
+  const [purchaseNotes, setPurchaseNotes] = useState('')
   const [selectedProduct, setSelectedProduct] = useState<number>(0)
   const [selectedSize, setSelectedSize] = useState<number>(5)
   const [qty, setQty] = useState('1')
@@ -177,6 +185,52 @@ export function Decants() {
     await db.supplies.delete(id)
   }
 
+  // ── Compra de insumos ──
+  function openPurchase() {
+    setPurchaseLines(supplies.map(s => ({ supplyId: s.id!, qty: '', unitCost: String(s.costPYG) })))
+    setPurchaseAccountId('')
+    setPurchaseDate(today())
+    setPurchaseNotes('')
+    setShowPurchase(true)
+  }
+
+  async function handlePurchase() {
+    const activeLines = purchaseLines.filter(l => parseInt(l.qty) > 0)
+    const accountId = parseInt(purchaseAccountId)
+    if (!activeLines.length || !accountId) return
+
+    const total = activeLines.reduce((sum, l) => sum + (parseInt(l.qty) || 0) * (parseFloat(l.unitCost) || 0), 0)
+    if (total <= 0) return
+
+    const now = nowISO()
+    await db.transaction('rw', db.supplies, db.movements, db.accounts, async () => {
+      for (const line of activeLines) {
+        const qty = parseInt(line.qty)
+        const unitCost = parseFloat(line.unitCost) || 0
+        await db.supplies.where('id').equals(line.supplyId).modify(s => {
+          s.stock += qty
+          if (unitCost > 0) s.costPYG = unitCost
+          s.updatedAt = now
+        })
+      }
+      await db.accounts.where('id').equals(accountId).modify(a => { a.balance -= total })
+      const names = activeLines.map(l => {
+        const s = supplies.find(x => x.id === l.supplyId)
+        return `${s?.name ?? 'Insumo'} ×${l.qty}`
+      }).join(', ')
+      await db.movements.add({
+        type: 'expense',
+        category: 'supplies',
+        amount: total,
+        accountId,
+        description: purchaseNotes.trim() || `Compra de insumos: ${names}`,
+        date: purchaseDate,
+        createdAt: now,
+      })
+    })
+    setShowPurchase(false)
+  }
+
   return (
     <div>
       <PageHeader
@@ -185,6 +239,7 @@ export function Decants() {
         action={
           <div className="flex gap-2">
             <Button variant="secondary" icon={<Package size={15} />} onClick={() => setShowSupply(true)}>Gestionar insumos</Button>
+            <Button variant="secondary" icon={<ShoppingCart size={15} />} onClick={openPurchase} disabled={supplies.length === 0}>Registrar compra</Button>
             <Button icon={<Plus size={15} />} onClick={() => setShowProduce(true)}>Producir lote</Button>
           </div>
         }
@@ -496,20 +551,27 @@ export function Decants() {
                   ]}
                 />
               </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <Input
-                    label="Tamaño (ml)"
-                    type="number"
-                    value={supplyForm.sizeML}
-                    onChange={e => setSupplyForm(f => ({ ...f, sizeML: e.target.value }))}
-                    placeholder="Ej: 5"
-                  />
-                  <p className="text-xs text-gray-400 mt-1">Crucial para asociar al decant correcto</p>
-                </div>
-                <Input label="Costo unitario (Gs.)" type="number" value={supplyForm.costPYG} onChange={e => setSupplyForm(f => ({ ...f, costPYG: e.target.value }))} />
-                <Input label="Stock actual" type="number" value={supplyForm.stock} onChange={e => setSupplyForm(f => ({ ...f, stock: e.target.value }))} />
-              </div>
+              {(() => {
+                const isDecantVial = ['3ml','5ml','10ml','30ml'].includes(supplyForm.type)
+                return (
+                  <div className={`grid gap-3 ${isDecantVial ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                    {isDecantVial && (
+                      <div>
+                        <Input
+                          label="Tamaño (ml)"
+                          type="number"
+                          value={supplyForm.sizeML}
+                          onChange={e => setSupplyForm(f => ({ ...f, sizeML: e.target.value }))}
+                          placeholder="Ej: 5"
+                        />
+                        <p className="text-xs text-gray-400 mt-1">Para asociar al decant correcto</p>
+                      </div>
+                    )}
+                    <Input label="Costo unitario (Gs.)" type="number" value={supplyForm.costPYG} onChange={e => setSupplyForm(f => ({ ...f, costPYG: e.target.value }))} />
+                    <Input label="Stock actual" type="number" value={supplyForm.stock} onChange={e => setSupplyForm(f => ({ ...f, stock: e.target.value }))} />
+                  </div>
+                )
+              })()}
               <Button className="w-full" onClick={handleAddSupply} disabled={!supplyForm.name || !supplyForm.costPYG}>
                 Agregar insumo
               </Button>
@@ -609,6 +671,115 @@ export function Decants() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Modal registrar compra de insumos */}
+      <Modal isOpen={showPurchase} onClose={() => setShowPurchase(false)} title="Registrar compra de insumos" size="lg">
+        {(() => {
+          const activeLines = purchaseLines.filter(l => parseInt(l.qty) > 0)
+          const total = activeLines.reduce((sum, l) => sum + (parseInt(l.qty) || 0) * (parseFloat(l.unitCost) || 0), 0)
+          return (
+            <div className="space-y-4">
+              {/* Tabla de insumos */}
+              <div className="border border-gray-100 rounded-xl overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr className="border-b border-gray-100">
+                      <th className="text-left px-4 py-2.5 text-gray-500 font-medium">Insumo</th>
+                      <th className="text-right px-3 py-2.5 text-gray-500 font-medium w-24">Cantidad</th>
+                      <th className="text-right px-3 py-2.5 text-gray-500 font-medium w-32">Costo unit. (Gs.)</th>
+                      <th className="text-right px-4 py-2.5 text-gray-500 font-medium w-28">Subtotal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {purchaseLines.map((line, i) => {
+                      const supply = supplies.find(s => s.id === line.supplyId)
+                      const qty = parseInt(line.qty) || 0
+                      const cost = parseFloat(line.unitCost) || 0
+                      const subtotal = qty * cost
+                      const active = qty > 0
+                      return (
+                        <tr key={line.supplyId} className={`border-b border-gray-50 ${active ? 'bg-violet-50' : ''}`}>
+                          <td className="px-4 py-2.5">
+                            <p className="font-medium text-gray-900">{supply?.name}</p>
+                            <p className="text-xs text-gray-400">Stock actual: {supply?.stock ?? 0} u.</p>
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <input
+                              type="number"
+                              min="0"
+                              placeholder="0"
+                              value={line.qty}
+                              onChange={e => setPurchaseLines(ls => ls.map((l, j) => j === i ? { ...l, qty: e.target.value } : l))}
+                              className="w-full text-right text-sm border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                            />
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <input
+                              type="number"
+                              min="0"
+                              value={line.unitCost}
+                              onChange={e => setPurchaseLines(ls => ls.map((l, j) => j === i ? { ...l, unitCost: e.target.value } : l))}
+                              className="w-full text-right text-sm border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                            />
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-semibold text-gray-900">
+                            {active ? fmtPYG(subtotal) : '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Total */}
+              {total > 0 && (
+                <div className="flex items-center justify-between bg-violet-50 rounded-xl px-4 py-3">
+                  <span className="text-sm font-medium text-gray-700">Total a descontar</span>
+                  <span className="text-lg font-bold text-violet-700">{fmtPYG(total)}</span>
+                </div>
+              )}
+
+              {/* Cuenta + Fecha */}
+              <div className="grid grid-cols-2 gap-3">
+                <Select
+                  label="Pagar desde cuenta"
+                  value={purchaseAccountId}
+                  onChange={e => setPurchaseAccountId(e.target.value)}
+                  options={[
+                    { value: '', label: 'Seleccionar cuenta...' },
+                    ...accounts.map(a => ({ value: String(a.id), label: `${a.name} — ${fmtPYG(a.balance)}` })),
+                  ]}
+                />
+                <Input
+                  label="Fecha"
+                  type="date"
+                  value={purchaseDate}
+                  onChange={e => setPurchaseDate(e.target.value)}
+                />
+              </div>
+
+              <Input
+                label="Descripción (opcional)"
+                placeholder="Ej: Compra en ferretería, pedido a proveedor..."
+                value={purchaseNotes}
+                onChange={e => setPurchaseNotes(e.target.value)}
+              />
+
+              <div className="flex gap-2 pt-2">
+                <Button variant="secondary" className="flex-1" onClick={() => setShowPurchase(false)}>Cancelar</Button>
+                <Button
+                  className="flex-1"
+                  onClick={handlePurchase}
+                  disabled={activeLines.length === 0 || !purchaseAccountId || total <= 0}
+                >
+                  Registrar compra — {total > 0 ? fmtPYG(total) : '—'}
+                </Button>
+              </div>
+            </div>
+          )
+        })()}
       </Modal>
 
       {/* Modal editar producción */}

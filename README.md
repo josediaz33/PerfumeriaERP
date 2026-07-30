@@ -10,7 +10,7 @@
 
 ---
 
-## Estado actual — v2.1
+## Estado actual — v2.2
 
 | Fase | Estado | Descripción |
 |------|--------|-------------|
@@ -36,11 +36,11 @@ Toda la información se almacena localmente en el navegador mediante **IndexedDB
 |--------|-------------|
 | **Dashboard** | KPIs del mes: ventas, utilidad, stock crítico, pedidos pendientes |
 | **Inventario** | Productos por tipo (sellado / tester / decant\_source), lotes con CPP ponderado (FIFO), alertas de stock mínimo, fotos de producto, apertura de botella para decants |
-| **Decants** | Producción de frascos, control de ML, historial trazable por origen |
+| **Decants** | Producción de frascos, control de ML, historial trazable por origen, compra de insumos con débito de cuenta |
 | **Ventas** | Registro de ventas directas de sellados, decants, parciales e insumos con desglose de ganancia por ítem |
-| **Logística** | Pipeline de pedidos locales con validación de stock, señas/pagos anticipados, comisiones tarjeta/QR, entrega con cobro de saldo o vuelto digital, gasto de envío contabilizado |
+| **Logística** | Pipeline de pedidos locales con validación de stock, señas/pagos anticipados, comisiones tarjeta/QR, entrega con cobro de saldo o vuelto digital, gasto de envío contabilizado, insumos como línea cobrable |
 | **Contabilidad** | Movimientos contables con filtros por mes, tipo y cuenta; eliminación de transferencias con reversión doble |
-| **Cuentas** | Saldos en tiempo real, historial por cuenta y recálculo desde movimientos |
+| **Cuentas** | Saldos en tiempo real, historial por cuenta, edición de transferencias y recálculo desde movimientos |
 | **Proveedores** | Órdenes de compra internacionales con recepción, distribución de flete y edición en cascada |
 | **Presupuestos** | Presupuestos PDF por cliente con análisis de rentabilidad interno y conversión a pedido; aplica descuentos por ítem y descuento global |
 | **Clientes** | Directorio de clientes con historial de compras y generación de etiquetas de envío |
@@ -118,6 +118,56 @@ Toda la información se almacena localmente en el navegador mediante **IndexedDB
 fleteProporcional = estimatedShippingPYG × (subtotalLineaUSD / totalSubtotalUSD)
 costoPYGLinea = subtotalLineaUSD × exchangeRate + fleteProporcional
 ```
+
+---
+
+## Novedades — adiciones v2.2
+
+### Catálogo — Mensaje WhatsApp profesional
+
+- El botón "Enviar por WhatsApp" del catálogo HTML exportado ahora genera un mensaje en formato ecommerce estándar:
+  - Encabezado con el nombre del negocio (`*Pedido — JODA Parfums*`)
+  - Una línea por ítem: bullet `•`, marca, nombre, tamaño o "Sellado", cantidad y subtotal en Gs.
+  - Total final en negrita
+  - Cierre cordial pidiendo confirmación de disponibilidad y datos de entrega
+- Se agregó la variable `BN` (business name) al HTML generado para incluir el nombre del negocio en el mensaje; `BP` ya existía para el número de WhatsApp
+
+### Cuentas — Fechas y edición de transferencias
+
+- **Fecha al crear**: al registrar una transferencia entre cuentas, ahora se puede establecer la fecha manualmente (campo de fecha con valor por defecto = hoy); si se deja en blanco usa la fecha actual
+- **Edición de transferencias**: botón editar (lápiz) en cada fila de transferencia del historial; permite corregir la fecha y la descripción de una transferencia ya registrada sin afectar los saldos
+
+### Decants — Compra de insumos y gestión de tipos
+
+- **Registrar compra**: botón "Registrar compra" en la cabecera de Decants abre un modal con todos los insumos disponibles; por cada insumo se puede ingresar cantidad comprada y costo unitario (pre-llenado con el costo actual); al confirmar:
+  - Se incrementa el stock de cada insumo con cantidad > 0
+  - Se actualiza el costo unitario si fue modificado
+  - Se genera un movimiento contable `expense/supplies` en la cuenta elegida
+  - Se descuenta el total de la cuenta seleccionada
+  - Se registra fecha y descripción del gasto
+- **sizeML oculto para packaging**: al gestionar insumos, el campo "Tamaño (ml)" solo aparece para tipos de frasco (`3ml / 5ml / 10ml / 30ml`); para tipos como `packaging`, `gift_wrap`, `cap`, `label` y `other` el campo está oculto por no tener sentido semántico
+
+### Inventario — Integridad de datos en apertura de botella
+
+Corrección de integridad de datos: anteriormente abrir una botella sellada agregaba `stockOpenML` al propio producto sellado, mezclando unidades y ML en una misma entidad.
+
+**Nuevo flujo al "Abrir para decants":**
+1. Descuenta 1 unidad de `stockSealed` en el producto sellado/tester (FIFO sobre lotes)
+2. Busca si ya existe un producto `decant_source` con el mismo nombre y marca
+   - **Si existe**: suma los ML y recalcula el CPP ponderado (`(mlExistentes × costoPrevio + costoPorML × mlNuevos) / (mlExistentes + mlNuevos)`)
+   - **Si no existe**: crea un nuevo producto `decant_source` con `stockOpenML = sizeML` y CPP por ML
+3. En ambos casos crea un `StockEntry` de tipo `decant_source` con el lote, fecha y costo por ML para trazabilidad completa
+- El modal de confirmación ahora muestra: producto destino (nuevo o existente), ML antes/después, CPP antes/después
+
+**Botón de migración de datos legados**: los productos sellados que aún conservaban `stockOpenML > 0` (flujo anterior incorrecto) muestran un botón naranja `+Xml ↗` con tooltip. Al hacer clic, migra esos ML al producto `decant_source` correspondiente (creándolo si no existe) y limpia `stockOpenML = 0` en el sellado.
+
+### Logística — Insumos como línea cobrable en pedidos
+
+- En el formulario de pedido (crear y editar), el selector de tipo de ítem ahora incluye la opción **"Insumo"**
+- Al elegir "Insumo", aparece un selector con todos los insumos disponibles (nombre + stock actual en tiempo real) en lugar del selector de productos
+- El precio unitario se pre-llena automáticamente con el costo del insumo seleccionado (editable)
+- Al guardar, el ítem queda asociado con `supplyId` para identificarlo como insumo cobrado al cliente
+- Caso de uso: bolsas de regalo, moños y packaging cobrados explícitamente en el pedido, manteniendo el margen real de la venta
 
 ### Fixes de esta fase
 
@@ -259,8 +309,9 @@ Los precios visibles en el catálogo (app y HTML exportado) se toman de `product
 
 ### Inventario
 - **Tipos de producto**: sellado, tester (se vende como sellado a precio diferente) y decant\_source
-- **Abrir para decants**: botón que descuenta 1 unidad sellada/tester por FIFO y suma los ML al stock abierto; permite convertir cualquier producto en fuente de decants
-- **Lotes (StockEntry)**: costo USD + cotización → costo PYG; CPP recalculado al agregar lotes
+- **Abrir para decants**: descuenta 1 unidad sellada/tester por FIFO y crea o actualiza un producto `decant_source` separado con CPP ponderado y lote de trazabilidad; nunca mezcla ML en la entidad sellada
+- **Migración de datos legados**: productos sellados con `stockOpenML > 0` (flujo anterior) muestran un botón naranja para migrar esos ML al `decant_source` correspondiente
+- **Lotes (StockEntry)**: costo USD + cotización → costo PYG; CPP recalculado al agregar lotes; lotes `decant_source` registran ML con costo por-ML
 - **Edición de lotes en cascada**: cambiar precio propaga el delta al movimiento contable y al saldo de la cuenta
 - **Fotos de producto**: hasta N fotos por producto con compresión automática (800px), thumbnails con hover-delete
 - **Visible en catálogo**: toggle por producto para controlar qué aparece en el catálogo público
@@ -304,6 +355,8 @@ Los precios visibles en el catálogo (app y HTML exportado) se toman de `product
 
 ### Cuentas
 - Historial por cuenta: filtro de mes, resumen ingresos/egresos/saldo del período, tabla de movimientos
+- **Fecha en transferencias**: campo de fecha editable al crear una transferencia (default: hoy)
+- **Edición de transferencias**: botón lápiz en cada fila de transferencia permite corregir fecha y descripción sin afectar saldos
 - **Recalcular desde movimientos**: herramienta de corrección que suma todos los movimientos de la cuenta para corregir inconsistencias históricas
 
 ### Utilidades

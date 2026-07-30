@@ -272,13 +272,22 @@ export function Inventario() {
   async function handleOpenForDecants(p: Product) {
     if (p.stockSealed < 1) return
     const now = nowISO()
+    const openDate = now.split('T')[0]
+    const existingDecant = products.find(
+      x => x.name === p.name && x.brand === p.brand && x.type === 'decant_source'
+    )
+    const costPerML = Math.round(p.costPYG / p.sizeML)
+    const costUSDPerML = p.costUSD > 0 ? Math.round((p.costUSD / p.sizeML) * 1000) / 1000 : 0
+    const entryNotes = `Apertura de ${p.brand} — ${p.name} (sellado)`
+
     await db.transaction('rw', db.products, db.stockEntries, async () => {
+      // 1. Descontar 1 unidad sellada (sin tocar stockOpenML del sellado)
       await db.products.update(p.id!, {
         stockSealed: p.stockSealed - 1,
-        stockOpenML: p.stockOpenML + p.sizeML,
         updatedAt: now,
       })
-      // FIFO: consume from oldest sealed lot
+
+      // 2. FIFO: consumir del lote sellado más antiguo
       const lots = (await db.stockEntries.where('productId').equals(p.id!).toArray())
         .filter(l => l.type === 'sealed' || l.type === 'tester')
         .sort((a, b) => a.date.localeCompare(b.date))
@@ -291,8 +300,146 @@ export function Inventario() {
         await db.stockEntries.update(lot.id!, { quantityRemaining: avail - deduct })
         toDeduct -= deduct
       }
+
+      // 3. Agregar ML al producto decant_source (existente o nuevo) + lote de trazabilidad
+      if (existingDecant) {
+        const newCPP = existingDecant.stockOpenML > 0
+          ? Math.round((existingDecant.stockOpenML * existingDecant.costPYG + p.costPYG) / (existingDecant.stockOpenML + p.sizeML))
+          : costPerML
+        await db.products.update(existingDecant.id!, {
+          stockOpenML: existingDecant.stockOpenML + p.sizeML,
+          costPYG: newCPP,
+          updatedAt: now,
+        })
+        await db.stockEntries.add({
+          productId: existingDecant.id!,
+          type: 'decant_source',
+          quantity: p.sizeML,
+          quantityRemaining: p.sizeML,
+          costUSD: costUSDPerML,
+          exchangeRate: p.exchangeRateUsed,
+          costPYG: costPerML,
+          date: openDate,
+          notes: entryNotes,
+          createdAt: now,
+        })
+      } else {
+        const newId = await db.products.add({
+          name: p.name,
+          brand: p.brand,
+          olfactiveFamily: p.olfactiveFamily,
+          concentration: p.concentration,
+          sizeML: p.sizeML,
+          type: 'decant_source',
+          sellingPricePYG: 0,
+          minStock: 1,
+          costPYG: costPerML,
+          costUSD: costUSDPerML,
+          exchangeRateUsed: p.exchangeRateUsed,
+          stockSealed: 0,
+          stockOpenML: p.sizeML,
+          catalogVisible: false,
+          price3ML: p.price3ML,
+          price5ML: p.price5ML,
+          price10ML: p.price10ML,
+          price30ML: p.price30ML,
+          notes: p.notes,
+          createdAt: now,
+          updatedAt: now,
+        })
+        await db.stockEntries.add({
+          productId: newId as number,
+          type: 'decant_source',
+          quantity: p.sizeML,
+          quantityRemaining: p.sizeML,
+          costUSD: costUSDPerML,
+          exchangeRate: p.exchangeRateUsed,
+          costPYG: costPerML,
+          date: openDate,
+          notes: entryNotes,
+          createdAt: now,
+        })
+      }
     })
     setOpenDecantProduct(null)
+  }
+
+  async function handleMigrateOpenMLToDecants(p: Product) {
+    if (p.stockOpenML <= 0) return
+    if (!confirm(`¿Migrar ${p.stockOpenML}ml de "${p.name}" al producto "Para decants" correspondiente?\n\nEsto corrige datos del flujo anterior: quita los ML del sellado y los mueve al tipo correcto.`)) return
+
+    const now = nowISO()
+    const openDate = now.split('T')[0]
+    const existingDecant = products.find(
+      x => x.name === p.name && x.brand === p.brand && x.type === 'decant_source'
+    )
+    const mlToMigrate = p.stockOpenML
+    const costPerML = Math.round(p.costPYG / p.sizeML)
+    const costUSDPerML = p.costUSD > 0 ? Math.round((p.costUSD / p.sizeML) * 1000) / 1000 : 0
+    const entryNotes = `Migración desde ${p.brand} — ${p.name} (sellado)`
+
+    await db.transaction('rw', db.products, db.stockEntries, async () => {
+      await db.products.update(p.id!, { stockOpenML: 0, updatedAt: now })
+
+      if (existingDecant) {
+        const newCPP = existingDecant.stockOpenML > 0
+          ? Math.round((existingDecant.stockOpenML * existingDecant.costPYG + mlToMigrate * costPerML) / (existingDecant.stockOpenML + mlToMigrate))
+          : costPerML
+        await db.products.update(existingDecant.id!, {
+          stockOpenML: existingDecant.stockOpenML + mlToMigrate,
+          costPYG: newCPP,
+          updatedAt: now,
+        })
+        await db.stockEntries.add({
+          productId: existingDecant.id!,
+          type: 'decant_source',
+          quantity: mlToMigrate,
+          quantityRemaining: mlToMigrate,
+          costUSD: costUSDPerML,
+          exchangeRate: p.exchangeRateUsed,
+          costPYG: costPerML,
+          date: openDate,
+          notes: entryNotes,
+          createdAt: now,
+        })
+      } else {
+        const newId = await db.products.add({
+          name: p.name,
+          brand: p.brand,
+          olfactiveFamily: p.olfactiveFamily,
+          concentration: p.concentration,
+          sizeML: p.sizeML,
+          type: 'decant_source',
+          sellingPricePYG: 0,
+          minStock: 1,
+          costPYG: costPerML,
+          costUSD: costUSDPerML,
+          exchangeRateUsed: p.exchangeRateUsed,
+          stockSealed: 0,
+          stockOpenML: mlToMigrate,
+          catalogVisible: false,
+          price3ML: p.price3ML,
+          price5ML: p.price5ML,
+          price10ML: p.price10ML,
+          price30ML: p.price30ML,
+          notes: p.notes,
+          createdAt: now,
+          updatedAt: now,
+        })
+        await db.stockEntries.add({
+          productId: newId as number,
+          type: 'decant_source',
+          quantity: mlToMigrate,
+          quantityRemaining: mlToMigrate,
+          costUSD: costUSDPerML,
+          exchangeRate: p.exchangeRateUsed,
+          costPYG: costPerML,
+          date: openDate,
+          notes: entryNotes,
+          createdAt: now,
+        })
+      }
+    })
   }
 
   async function handleDelete(id: number) {
@@ -839,7 +986,13 @@ export function Inventario() {
                               {p.type === 'decant_source' ? `${p.stockOpenML} ml` : `${p.stockSealed} u.`}
                             </span>
                             {(p.type === 'sealed' || p.type === 'tester') && p.stockOpenML > 0 && (
-                              <span className="text-xs text-violet-500 ml-1">+{p.stockOpenML}ml</span>
+                              <button
+                                onClick={() => handleMigrateOpenMLToDecants(p)}
+                                className="text-xs text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded px-1 py-0.5 ml-1 cursor-pointer transition-colors"
+                                title="ML abiertos registrados en el sellado (flujo anterior). Hacer clic para migrar al producto Para decants."
+                              >
+                                +{p.stockOpenML}ml ↗
+                              </button>
                             )}
                           </div>
                         </td>
@@ -1553,27 +1706,55 @@ export function Inventario() {
 
       {/* ── Modal Abrir para decants ── */}
       <Modal isOpen={!!openDecantProduct} onClose={() => setOpenDecantProduct(null)} title="Abrir para decants">
-        {openDecantProduct && (
-          <div className="space-y-4">
-            <div className="bg-violet-50 rounded-xl p-4 space-y-2 text-sm">
-              <p className="font-semibold text-gray-900">{openDecantProduct.brand} — {openDecantProduct.name}</p>
-              <p className="text-gray-600">Se va a consumir <strong>1 unidad sellada</strong> ({openDecantProduct.sizeML}ml) y agregar <strong>{openDecantProduct.sizeML}ml</strong> al stock abierto para decants.</p>
-              <div className="grid grid-cols-2 gap-2 pt-1 text-xs text-gray-500">
-                <span>Stock sellado actual: <strong className="text-gray-800">{openDecantProduct.stockSealed} u.</strong></span>
-                <span>ML abiertos actuales: <strong className="text-gray-800">{openDecantProduct.stockOpenML} ml</strong></span>
-                <span>Quedará sellado: <strong className="text-orange-700">{openDecantProduct.stockSealed - 1} u.</strong></span>
-                <span>Quedará abierto: <strong className="text-violet-700">{openDecantProduct.stockOpenML + openDecantProduct.sizeML} ml</strong></span>
+        {openDecantProduct && (() => {
+          const destDecant = products.find(
+            x => x.name === openDecantProduct.name && x.brand === openDecantProduct.brand && x.type === 'decant_source'
+          )
+          const costPerML = Math.round(openDecantProduct.costPYG / openDecantProduct.sizeML)
+          return (
+            <div className="space-y-3">
+              <div className="bg-violet-50 rounded-xl p-4 space-y-3 text-sm">
+                <p className="font-semibold text-gray-900">{openDecantProduct.brand} — {openDecantProduct.name}</p>
+                <div className="grid grid-cols-2 gap-2 text-xs text-gray-500">
+                  <span>Sellado actual: <strong className="text-gray-800">{openDecantProduct.stockSealed} u.</strong></span>
+                  <span>Quedará sellado: <strong className="text-orange-700">{openDecantProduct.stockSealed - 1} u.</strong></span>
+                </div>
+                <div className="border-t border-violet-200 pt-3">
+                  {destDecant ? (
+                    <>
+                      <p className="text-xs text-violet-700 font-medium mb-2">Se suma al producto "Para decants" existente:</p>
+                      <div className="grid grid-cols-2 gap-2 text-xs text-gray-500">
+                        <span>ML actuales: <strong className="text-gray-800">{destDecant.stockOpenML} ml</strong></span>
+                        <span>Quedarán: <strong className="text-violet-700">{destDecant.stockOpenML + openDecantProduct.sizeML} ml</strong></span>
+                        <span>CPP actual: <strong className="text-gray-800">{fmtPYG(destDecant.costPYG)}/ml</strong></span>
+                        <span>CPP nuevo: <strong className="text-violet-700">{
+                          destDecant.stockOpenML > 0
+                            ? fmtPYG(Math.round((destDecant.stockOpenML * destDecant.costPYG + openDecantProduct.costPYG) / (destDecant.stockOpenML + openDecantProduct.sizeML)))
+                            : fmtPYG(costPerML)
+                        }/ml</strong></span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs text-violet-700 font-medium mb-2">Se creará un nuevo producto "Para decants":</p>
+                      <div className="grid grid-cols-2 gap-2 text-xs text-gray-500">
+                        <span>Stock inicial: <strong className="text-violet-700">{openDecantProduct.sizeML} ml</strong></span>
+                        <span>CPP inicial: <strong className="text-violet-700">{fmtPYG(costPerML)}/ml</strong></span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <Button variant="secondary" className="flex-1" onClick={() => setOpenDecantProduct(null)}>Cancelar</Button>
+                <Button className="flex-1" onClick={() => handleOpenForDecants(openDecantProduct)}>
+                  <Droplets size={15} />
+                  Confirmar apertura
+                </Button>
               </div>
             </div>
-            <div className="flex gap-2 pt-1">
-              <Button variant="secondary" className="flex-1" onClick={() => setOpenDecantProduct(null)}>Cancelar</Button>
-              <Button className="flex-1" onClick={() => handleOpenForDecants(openDecantProduct)}>
-                <Droplets size={15} />
-                Confirmar apertura
-              </Button>
-            </div>
-          </div>
-        )}
+          )
+        })()}
       </Modal>
     </div>
   )
