@@ -188,6 +188,20 @@ Corrección de integridad de datos: anteriormente abrir una botella sellada agre
 | **Proveedores** | Tipo de producto por ítem al crear pedido (Sellado / Tester / Para decants); chips de selección compactos con Sellado como default; autocomplete pre-llena el tipo del producto existente |
 | **Proveedores** | Al pre-crear y recepcionar, el tipo del ítem determina el stock y CPP correctos; productos de mismo nombre pero distinto tipo coexisten como entidades separadas |
 
+### Fixes y mejoras adicionales (post v2.2)
+
+| Módulo | Cambio |
+|--------|--------|
+| **Logística** | Items tipo 'Insumo' ahora guardan correctamente: el filtro `validItems` excluía ítems con `productId = '0'` aunque tuvieran `supplyId` válido |
+| **Logística** | `totalCost` en entrega ahora incluye el costo de `order.supplies` (insumos utilizados); antes el margen en Ventas quedaba inflado |
+| **Ventas** | Vista de detalle de venta muestra fila 'Insumos y envío' con el monto descontado cuando hay costos adicionales no reflejados en los ítems individuales; también muestra fila de comisión tarjeta/QR si aplica |
+| **Ventas** | Etiqueta de tipo en detalle de venta corregida para mostrar 'Tester' e 'Insumo' además de Sellado/Decant/Parcial |
+| **Decants** | Historial de producción mostraba '—' para perfumes cuyo stock llegó a 0: `allProducts` ahora carga todos los productos sin filtro; `openProducts` (con ML disponibles) se usa solo en las cards de calculadora y el selector de producción |
+| **Decants** | Calculadora de costos rediseñada: reemplaza grilla de cards grandes (una por producto, ~150px c/u) por tabla compacta de una fila por producto — reduce drásticamente el scroll |
+| **Proveedores** | Eliminar un pedido no recibido (pendiente/en camino) con prepago ahora revierte el movimiento contable y repone el saldo en la cuenta; antes solo eliminaba el registro del pedido |
+| **Proveedores** | Modal 'Registrar pago anticipado' incluye campo de fecha editable (default: hoy) |
+| **Proveedores** | Recepción de ítems `decant_source`: usa `item.sizeML` del pedido en lugar del `sizeML` del producto existente — permite comprar viales de 3ml de un perfume definido como 100ml sin registrar 100ml por error |
+
 ---
 
 ## Stack tecnológico

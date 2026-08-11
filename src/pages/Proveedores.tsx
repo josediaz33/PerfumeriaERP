@@ -42,6 +42,7 @@ export function Proveedores() {
   const [showPayOrder, setShowPayOrder] = useState(false)
   const [payingOrder, setPayingOrder] = useState<Order | null>(null)
   const [payOrderAccountId, setPayOrderAccountId] = useState('')
+  const [payOrderDate, setPayOrderDate] = useState(today())
 
   // Edit received order modal
   const [editOrder, setEditOrder] = useState<Order | null>(null)
@@ -175,7 +176,7 @@ export function Proveedores() {
         type: 'expense', category: 'restock', amount: totalPYG, accountId: accId,
         description: `Pago anticipado — ${supplierName} (${payingOrder.items.length} producto(s))`,
         referenceId: payingOrder.id, referenceType: 'order',
-        date: today(), createdAt: now,
+        date: payOrderDate || today(), createdAt: now,
       })
       await db.accounts.where('id').equals(accId).modify(a => { a.balance -= totalPYG })
       await db.orders.update(payingOrder.id!, { prepaidAmount: totalPYG })
@@ -226,7 +227,11 @@ export function Proveedores() {
 
         const itemType = item.type ?? 'sealed'
         const isDecant = existing ? existing.type === 'decant_source' : itemType === 'decant_source'
-        const sizeML = isDecant && existing?.sizeML ? existing.sizeML : item.sizeML
+        // Para decant_source usar siempre el sizeML del ítem: el usuario especificó
+        // exactamente cuántos ML compró (puede ser diferente al sizeML del producto,
+        // ej: 3ml de un producto definido como botella de 100ml). Para sellado/tester
+        // preferir el sizeML del producto existente para consistencia.
+        const sizeML = isDecant ? item.sizeML : (existing?.sizeML ?? item.sizeML)
 
         // For decant_source: qty = total ML, costUSD = per ML
         const qty = isDecant ? item.quantity * sizeML : item.quantity
@@ -455,13 +460,26 @@ export function Proveedores() {
   async function handleDeleteOrder(order: (typeof orders)[0]) {
     const isReceived = order.status === 'received'
     const supplierName = suppliers.find(s => s.id === order.supplierId)?.name ?? 'proveedor'
+    const hasPrepago = (order.prepaidAmount ?? 0) > 0
     const msg = isReceived
       ? `¿Eliminar el pedido recibido de ${supplierName}?\n\nEsto eliminará los lotes de stock ingresados y revertirá el inventario.`
-      : `¿Eliminar el pedido a ${supplierName}?`
+      : hasPrepago
+        ? `¿Eliminar el pedido a ${supplierName}?\n\nEl pago anticipado registrado será revertido y el saldo devuelto a la cuenta correspondiente.`
+        : `¿Eliminar el pedido a ${supplierName}?`
     if (!confirm(msg)) return
 
     if (!isReceived) {
-      await db.orders.delete(order.id!)
+      await db.transaction('rw', [db.orders, db.movements, db.accounts], async () => {
+        const orderMovements = await db.movements
+          .where('referenceId').equals(order.id!)
+          .filter(m => m.referenceType === 'order')
+          .toArray()
+        for (const mv of orderMovements) {
+          await db.accounts.where('id').equals(mv.accountId).modify(a => { a.balance += mv.amount })
+          await db.movements.delete(mv.id!)
+        }
+        await db.orders.delete(order.id!)
+      })
       return
     }
 
@@ -632,7 +650,7 @@ export function Proveedores() {
                               <span className="text-xs text-green-600 font-semibold px-2 py-0.5 bg-green-50 rounded-full">Prepagado</span>
                             )}
                             {o.status !== 'received' && !(o.prepaidAmount) && (
-                              <Button size="sm" variant="secondary" onClick={() => { setPayingOrder(o); setPayOrderAccountId(accounts[0] ? String(accounts[0].id) : ''); setShowPayOrder(true) }}>
+                              <Button size="sm" variant="secondary" onClick={() => { setPayingOrder(o); setPayOrderAccountId(accounts[0] ? String(accounts[0].id) : ''); setPayOrderDate(today()); setShowPayOrder(true) }}>
                                 Pagar
                               </Button>
                             )}
@@ -1077,12 +1095,20 @@ export function Proveedores() {
                 <span className="text-gray-600">{payingOrder.items.length} ítem(s)</span>
               </div>
             </div>
-            <Select
-              label="Cuenta de débito"
-              value={payOrderAccountId}
-              onChange={e => setPayOrderAccountId(e.target.value)}
-              options={[{ value: '', label: 'Seleccionar...' }, ...accounts.map(a => ({ value: String(a.id), label: `${a.name} (${fmtPYG(a.balance)})` }))]}
-            />
+            <div className="grid grid-cols-2 gap-3">
+              <Select
+                label="Cuenta de débito"
+                value={payOrderAccountId}
+                onChange={e => setPayOrderAccountId(e.target.value)}
+                options={[{ value: '', label: 'Seleccionar...' }, ...accounts.map(a => ({ value: String(a.id), label: `${a.name} (${fmtPYG(a.balance)})` }))]}
+              />
+              <Input
+                label="Fecha del pago"
+                type="date"
+                value={payOrderDate}
+                onChange={e => setPayOrderDate(e.target.value)}
+              />
+            </div>
             <div className="flex gap-2 pt-2">
               <Button variant="secondary" className="flex-1" onClick={() => { setShowPayOrder(false); setPayingOrder(null) }}>Cancelar</Button>
               <Button className="flex-1" onClick={handlePayOrder} disabled={!payOrderAccountId}>Registrar pago</Button>

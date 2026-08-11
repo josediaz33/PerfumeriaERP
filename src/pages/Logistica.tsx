@@ -161,7 +161,7 @@ export function Logistica() {
 
   async function handleCreate() {
     if (!form.customerName.trim()) return
-    const validItems = form.items.filter(i => i.productId !== '0' && i.unitPrice)
+    const validItems = form.items.filter(i => (i.type === 'supply' ? !!i.supplyId : i.productId !== '0') && i.unitPrice)
     if (!validItems.length) return
 
     if (!form.isPreOrder) {
@@ -515,7 +515,8 @@ export function Logistica() {
       itemCosts.push(unitCost)
     }
     const shippingExpense = order.shippingPaidBy === 'business' ? order.shippingCost : 0
-    const totalCost = order.items.reduce((s, item, i) => s + itemCosts[i] * item.quantity, 0) + shippingExpense
+    const suppliesCost = (order.supplies ?? []).reduce((s, si) => s + (si.unitCost ?? 0) * si.quantity, 0)
+    const totalCost = order.items.reduce((s, item, i) => s + itemCosts[i] * item.quantity, 0) + shippingExpense + suppliesCost
 
     const señaTotal = (order.advancePayments ?? []).reduce((s, p) => s + p.amount, 0)
     const saldo = Math.max(0, order.totalAmount - señaTotal)

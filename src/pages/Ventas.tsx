@@ -556,7 +556,7 @@ export function Ventas() {
                                               {product ? `${product.brand} — ${product.name}` : `Producto #${si.productId}`}
                                             </p>
                                             <p className="text-xs text-gray-400">
-                                              {si.type === 'sealed' ? 'Sellado' : si.type === 'partial' ? `Parcial ${si.sizeML}ml` : `Decant ${si.sizeML}ml`}
+                                              {si.type === 'sealed' ? 'Sellado' : si.type === 'tester' ? 'Tester' : si.type === 'supply' ? 'Insumo' : si.type === 'partial' ? `Parcial ${si.sizeML}ml` : `Decant ${si.sizeML}ml`}
                                             </p>
                                           </td>
                                           <td className="px-4 py-2.5 text-right text-gray-700">{si.quantity} u.</td>
@@ -569,6 +569,23 @@ export function Ventas() {
                                         </tr>
                                       )
                                     })}
+                                    {(() => {
+                                      const itemsProfit = saleItems.reduce((sum, si) => sum + si.profit, 0)
+                                      const extraCost = itemsProfit - s.totalProfit - (s.commission ?? 0)
+                                      if (extraCost <= 0) return null
+                                      return (
+                                        <tr className="border-t border-gray-100 bg-gray-50/40">
+                                          <td className="px-4 py-2 text-gray-400 italic text-xs" colSpan={4}>Insumos y envío</td>
+                                          <td className="px-4 py-2 text-right text-xs font-medium text-red-400">−{fmtPYG(extraCost)}</td>
+                                        </tr>
+                                      )
+                                    })()}
+                                    {(s.commission ?? 0) > 0 && (
+                                      <tr className="border-t border-gray-100 bg-gray-50/40">
+                                        <td className="px-4 py-2 text-gray-400 italic text-xs" colSpan={4}>Comisión tarjeta/QR</td>
+                                        <td className="px-4 py-2 text-right text-xs font-medium text-red-400">−{fmtPYG(s.commission!)}</td>
+                                      </tr>
+                                    )}
                                   </tbody>
                                   <tfoot>
                                     <tr className="bg-gray-50 border-t border-gray-100">

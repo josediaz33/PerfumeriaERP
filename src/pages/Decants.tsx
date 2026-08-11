@@ -25,7 +25,8 @@ function findSupplyForSize(supplies: Supply[], sizeML: number): Supply | undefin
 }
 
 export function Decants() {
-  const allProducts = useLiveQuery(() => db.products.filter(p => p.stockOpenML > 0).toArray()) ?? []
+  const allProducts = useLiveQuery(() => db.products.toArray()) ?? []
+  const openProducts = allProducts.filter(p => p.stockOpenML > 0)
   const supplies = useLiveQuery(() => db.supplies.toArray()) ?? []
   const batches = useLiveQuery(() => db.decantBatches.orderBy('date').reverse().toArray()) ?? []
   const accounts = useLiveQuery(() => db.accounts.filter(a => a.isActive !== false).toArray()) ?? []
@@ -63,7 +64,7 @@ export function Decants() {
   const [editDate, setEditDate] = useState('')
   const [editNotes, setEditNotes] = useState('')
 
-  const product = allProducts.find(p => p.id === selectedProduct)
+  const product = openProducts.find(p => p.id === selectedProduct)
   const cpm = product
     ? (product.type === 'decant_source' ? product.costPYG : product.costPYG / product.sizeML)
     : 0
@@ -245,55 +246,57 @@ export function Decants() {
         }
       />
 
-      {/* Calculadora por producto */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-        {allProducts.map(p => {
-          const cpm = p.costPYG
-          return (
-            <Card key={p.id}>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-semibold text-gray-900">{p.name}</p>
-                    <p className="text-sm text-gray-500">{p.brand} · {p.sizeML}ml · {p.stockOpenML}ml disponibles</p>
-                  </div>
-                  <Badge color="violet">{fmtPYG(p.costPYG)}/ml</Badge>
-                </div>
-              </CardHeader>
-              <CardBody>
-                <div className="grid grid-cols-4 gap-2">
-                  {DECANT_SIZES.map(size => {
-                    const sup = findSupplyForSize(supplies, size)
-                    const cost = cpm * size + (sup?.costPYG ?? 0)
-                    const canMake = Math.floor(p.stockOpenML / size)
-                    return (
-                      <div key={size} className={`rounded-lg p-2.5 text-center ${sup ? 'bg-gray-50' : 'bg-orange-50 border border-orange-100'}`}>
-                        <p className="text-xs font-medium text-violet-600">{size}ml</p>
-                        <p className="text-sm font-bold text-gray-900 mt-1">{fmtPYG(Math.round(cost))}</p>
-                        {sup ? (
-                          <p className="text-xs text-gray-400 truncate" title={sup.name}>{sup.name}</p>
-                        ) : (
-                          <p className="text-xs text-orange-500">Sin frasco</p>
-                        )}
-                        <p className="text-xs text-green-600 mt-1">{canMake} posibles</p>
-                      </div>
-                    )
-                  })}
-                </div>
-              </CardBody>
-            </Card>
-          )
-        })}
-        {allProducts.length === 0 && (
-          <div className="lg:col-span-2">
-            <Card><CardBody className="text-center py-12">
-              <FlaskConical size={40} className="mx-auto text-gray-300 mb-3" />
-              <p className="text-gray-400">No hay botellas abiertas para decants</p>
-              <p className="text-sm text-gray-400">Agrega productos de tipo "Para decants" en el inventario</p>
-            </CardBody></Card>
+      {/* Calculadora por producto — tabla compacta */}
+      <Card className="mb-6">
+        {openProducts.length === 0 ? (
+          <CardBody className="text-center py-12">
+            <FlaskConical size={40} className="mx-auto text-gray-300 mb-3" />
+            <p className="text-gray-400">No hay botellas abiertas para decants</p>
+            <p className="text-sm text-gray-400">Agrega productos de tipo "Para decants" en el inventario</p>
+          </CardBody>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50/60">
+                  <th className="text-left px-5 py-2.5 text-gray-500 font-medium">Perfume</th>
+                  <th className="text-right px-4 py-2.5 text-gray-400 font-medium text-xs">Gs/ml</th>
+                  {DECANT_SIZES.map(size => (
+                    <th key={size} className="text-right px-4 py-2.5 text-violet-600 font-semibold">{size}ml</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {openProducts.map(p => {
+                  const cpm = p.costPYG
+                  return (
+                    <tr key={p.id} className="border-b border-gray-50 hover:bg-violet-50/20 last:border-0 transition-colors">
+                      <td className="px-5 py-3">
+                        <p className="font-semibold text-gray-900">{p.name}</p>
+                        <p className="text-xs text-gray-400">{p.brand} · <span className="text-violet-500 font-medium">{p.stockOpenML}ml disp.</span></p>
+                      </td>
+                      <td className="px-4 py-3 text-right text-gray-400 text-xs whitespace-nowrap">{fmtPYG(p.costPYG)}</td>
+                      {DECANT_SIZES.map(size => {
+                        const sup = findSupplyForSize(supplies, size)
+                        const cost = cpm * size + (sup?.costPYG ?? 0)
+                        const canMake = Math.floor(p.stockOpenML / size)
+                        return (
+                          <td key={size} className={`px-4 py-3 text-right whitespace-nowrap ${!sup ? 'bg-orange-50/50' : ''}`}>
+                            <p className="font-semibold text-gray-900">{fmtPYG(Math.round(cost))}</p>
+                            <p className={`text-xs ${canMake === 0 ? 'text-gray-300' : 'text-green-600'}`}>
+                              {!sup ? <span className="text-orange-400">sin frasco</span> : `${canMake} pos.`}
+                            </p>
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
         )}
-      </div>
+      </Card>
 
       {/* Insumos */}
       <div className="mb-6">
@@ -413,13 +416,13 @@ export function Decants() {
             onChange={e => {
               const id = parseInt(e.target.value)
               setSelectedProduct(id)
-              const p = allProducts.find(x => x.id === id)
+              const p = openProducts.find(x => x.id === id)
               if (p) {
                 const autoP = selectedSize === 3 ? p.price3ML : selectedSize === 5 ? p.price5ML : selectedSize === 10 ? p.price10ML : p.price30ML
                 if (autoP) setSellingPrice(String(autoP))
               }
             }}
-            options={[{ value: '0', label: 'Seleccionar...' }, ...allProducts.map(p => ({
+            options={[{ value: '0', label: 'Seleccionar...' }, ...openProducts.map(p => ({
               value: String(p.id),
               label: `${p.brand} — ${p.name} (${p.stockOpenML}ml disponibles)${p.type === 'tester' ? ' · TESTER' : p.type === 'sealed' ? ' · SELLADO ABIERTO' : ''}`,
             }))]}
