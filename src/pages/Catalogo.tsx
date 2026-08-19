@@ -1,13 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { Search, Download, BookImage, FileCode, X, Globe, Copy, Check } from 'lucide-react'
+import { Search, Download, FileCode, X, Globe, Copy, Check, SlidersHorizontal } from 'lucide-react'
 import { db, getConfig } from '../db/db'
 import type { Product, OlfactiveFamily } from '../db/types'
 import { fmtPYG } from '../lib/format'
 import { blobToBase64 } from '../lib/images'
-import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
-import { Badge } from '../components/ui/Badge'
 
 const families: { value: OlfactiveFamily; label: string }[] = [
   { value: 'floral', label: 'Floral' }, { value: 'woody', label: 'Amaderado' },
@@ -19,13 +17,17 @@ const families: { value: OlfactiveFamily; label: string }[] = [
 
 const familyLabel = (f: OlfactiveFamily) => families.find(x => x.value === f)?.label ?? f
 
-function ImagePlaceholder({ size = 48 }: { size?: number }) {
+function ImagePlaceholder({ size = 56 }: { size?: number }) {
+  const s = size
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-      stroke="#c9bfaf" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <circle cx="8.5" cy="8.5" r="1.5" />
-      <path d="m21 15-5-5L5 21" />
+    <svg width={s} height={s} viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+      {/* Frasco de perfume minimalista */}
+      <rect x="18" y="26" width="20" height="22" rx="5" fill="#e2dbd2" />
+      <rect x="22" y="17" width="12" height="10" rx="3" fill="#e2dbd2" />
+      <rect x="25" y="11" width="6" height="7" rx="2" fill="#d4cabf" />
+      <rect x="26.5" y="7" width="3" height="5" rx="1.5" fill="#c4b8aa" />
+      {/* Reflejo sutil */}
+      <rect x="22" y="30" width="3" height="12" rx="1.5" fill="#ede8e1" />
     </svg>
   )
 }
@@ -52,10 +54,7 @@ function CatalogThumb({ imageId }: { imageId: string }) {
 }
 
 // ── CATX-06: ficha individual ──────────────────────────────────────────────────
-function ProductModal({ product, onClose }: {
-  product: Product
-  onClose: () => void
-}) {
+function ProductModal({ product, onClose }: { product: Product; onClose: () => void }) {
   const [imgUrl, setImgUrl] = useState<string | null>(null)
   useEffect(() => {
     let url: string | null = null
@@ -74,13 +73,21 @@ function ProductModal({ product, onClose }: {
     { sizeML: 30, sellingPricePYG: product.price30ML ?? 0 },
   ].filter(s => s.sellingPricePYG > 0)
 
+  const typeLabel = product.type === 'sealed' ? 'Sellado' : product.type === 'tester' ? 'Tester' : 'Decants'
+  const typeColor = product.type === 'sealed'
+    ? 'bg-sky-50 text-sky-700'
+    : product.type === 'tester'
+      ? 'bg-amber-50 text-amber-700'
+      : 'bg-violet-50 text-violet-700'
+
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-        <div className="relative aspect-square max-h-64 bg-gradient-to-br from-amber-50 to-stone-100 overflow-hidden">
+      <div className="bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+        {/* Imagen */}
+        <div className="relative aspect-[4/3] bg-gradient-to-b from-stone-50 to-stone-100 overflow-hidden">
           {imgUrl ? (
             <img src={imgUrl} alt={product.name} className="w-full h-full object-cover" />
           ) : (
@@ -90,52 +97,63 @@ function ProductModal({ product, onClose }: {
           )}
           <button
             onClick={onClose}
-            className="absolute top-3 right-3 p-1.5 bg-white/90 rounded-full shadow hover:bg-white transition-colors"
+            className="absolute top-3 right-3 w-8 h-8 bg-white/90 backdrop-blur rounded-full shadow-sm flex items-center justify-center hover:bg-white transition-colors"
           >
-            <X size={16} className="text-gray-600" />
+            <X size={15} className="text-gray-600" />
           </button>
         </div>
-        <div className="p-5">
-          <div className="flex items-start gap-2 mb-3">
-            <Badge color={product.type === 'sealed' ? 'blue' : product.type === 'tester' ? 'yellow' : 'violet'}>
-              {product.type === 'sealed' ? 'Sellado' : product.type === 'tester' ? 'Tester' : 'Decants'}
-            </Badge>
+
+        {/* Contenido */}
+        <div className="p-5 pb-6">
+          {/* Tags */}
+          <div className="flex items-center gap-1.5 mb-3">
+            <span className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full ${typeColor}`}>{typeLabel}</span>
             {product.olfactiveFamily && (
-              <Badge color="gray">{familyLabel(product.olfactiveFamily)}</Badge>
+              <span className="text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                {familyLabel(product.olfactiveFamily)}
+              </span>
             )}
           </div>
-          <h2 className="text-xl font-bold text-gray-900 leading-tight">{product.name}</h2>
-          <p className="text-sm text-gray-500 mt-0.5">{product.brand}</p>
-          <p className="text-sm text-gray-400 mt-1">{product.concentration} · {product.sizeML}ml</p>
+
+          {/* Nombre y marca */}
+          <h2 className="text-[22px] font-bold text-gray-900 leading-tight tracking-tight">{product.name}</h2>
+          <p className="text-sm text-gray-400 font-medium mt-0.5 uppercase tracking-wide">{product.brand}</p>
+          <p className="text-xs text-gray-300 mt-1">{product.concentration} · {product.sizeML}ml</p>
+
+          {/* Notas */}
           {product.notes && (
-            <p className="text-sm text-gray-600 mt-3 bg-gray-50 rounded-lg px-3 py-2 leading-relaxed">
+            <p className="text-sm text-gray-500 mt-3 leading-relaxed border-l-2 border-stone-200 pl-3">
               {product.notes}
             </p>
           )}
+
+          {/* Precio */}
           <div className="mt-4">
             {product.type === 'sealed' || product.type === 'tester' ? (
               product.sellingPricePYG > 0 ? (
-                <p className="text-2xl font-bold text-violet-600">{fmtPYG(product.sellingPricePYG)}</p>
+                <p className="text-2xl font-bold text-gray-900 tracking-tight">{fmtPYG(product.sellingPricePYG)}</p>
               ) : (
-                <p className="text-sm text-gray-400">Precio a consultar</p>
+                <p className="text-sm text-gray-300 italic">Precio a consultar</p>
               )
+            ) : sizes.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {sizes.map(b => (
+                  <div key={b.sizeML} className="bg-gray-50 border border-gray-100 rounded-xl px-3.5 py-2 text-center">
+                    <p className="text-xs text-gray-400 font-medium">{b.sizeML}ml</p>
+                    <p className="text-sm font-bold text-gray-900 mt-0.5">{fmtPYG(b.sellingPricePYG)}</p>
+                  </div>
+                ))}
+              </div>
             ) : (
-              sizes.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {sizes.map(b => (
-                    <div key={b.sizeML} className="bg-violet-50 border border-violet-100 rounded-lg px-3 py-1.5 text-center">
-                      <p className="text-xs text-violet-500 font-medium">{b.sizeML}ml</p>
-                      <p className="text-sm font-bold text-violet-700">{fmtPYG(b.sellingPricePYG)}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-gray-400">Ver disponibilidad</p>
-              )
+              <p className="text-sm text-gray-300 italic">Ver disponibilidad</p>
             )}
           </div>
+
+          {/* Stock */}
           {(product.type === 'sealed' || product.type === 'tester') && (
-            <p className="text-xs text-gray-400 mt-3">Stock: {product.stockSealed} unidad{product.stockSealed !== 1 ? 'es' : ''}</p>
+            <p className="text-xs text-gray-300 mt-3">
+              {product.stockSealed} unidad{product.stockSealed !== 1 ? 'es' : ''} en stock
+            </p>
           )}
         </div>
       </div>
@@ -156,6 +174,7 @@ export function Catalogo() {
   const [publishedUrl, setPublishedUrl] = useState('')
   const [publishError, setPublishError] = useState('')
   const [urlCopied, setUrlCopied] = useState(false)
+  const [showFilters, setShowFilters] = useState(false)
 
   const available = products.filter(p => {
     if (p.catalogVisible === false) return false
@@ -292,7 +311,7 @@ export function Catalogo() {
 
     // Generar tarjeta + modal por producto
     const productItems = await Promise.all(filtered.map(async p => {
-      let imgTag = '<div class="ph"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#c9bfaf" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></div>'
+      let imgTag = '<div class="ph"><svg width="54" height="54" viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="18" y="26" width="20" height="22" rx="5" fill="#e2dbd2"/><rect x="22" y="17" width="12" height="10" rx="3" fill="#e2dbd2"/><rect x="25" y="11" width="6" height="7" rx="2" fill="#d4cabf"/><rect x="26.5" y="7" width="3" height="5" rx="1.5" fill="#c4b8aa"/><rect x="22" y="30" width="3" height="12" rx="1.5" fill="#ede8e1"/></svg></div>'
       if (p.imageIds?.[0]) {
         const img = await db.images.get(p.imageIds[0])
         if (img) {
@@ -316,25 +335,24 @@ export function Catalogo() {
         : ''
 
       // Bloque de precio en la tarjeta
+      const minSzPrice = szs.length > 0 ? Math.min(...szs.map(s => s.sellingPricePYG)) : 0
       const cardPrice = isDecant
         ? (szs.length > 0
-          ? '<div class="chips">' + szs.map(b => '<span class="chip">' + b.sizeML + 'ml &middot; Gs. ' + b.sellingPricePYG.toLocaleString('es-PY') + '</span>').join('') + '</div>'
+          ? '<p class="cprice">desde Gs. ' + minSzPrice.toLocaleString('es-PY') + '</p>'
           : '<p class="consult">Consultar disponibilidad</p>')
         : (p.sellingPricePYG > 0
-          ? '<p class="cprice">Gs. ' + p.sellingPricePYG.toLocaleString('es-PY') + '</p>'
+          ? '<p class="cprice">Gs. ' + p.sellingPricePYG.toLocaleString('es-PY') + '</p>'
           : '<p class="consult">Consultar precio</p>')
 
       // Tarjeta: link nativo → activa :target del modal
       const card =
         '<a href="#p-' + p.id + '" class="card" data-name="' + escHtml(p.name) + '" data-brand="' + escHtml(p.brand) + '">' +
-        '<div class="ci">' + imgTag + '</div>' +
+        '<div class="ci">' + imgTag + '<span class="badge ' + bc + ' cbadge">' + bl + '</span></div>' +
         '<div class="cb">' +
-        '<span class="badge ' + bc + '">' + bl + '</span>' +
-        '<div class="ct">' + escHtml(p.name) + '</div>' +
         '<div class="cbr">' + escHtml(p.brand) + '</div>' +
+        '<div class="ct">' + escHtml(p.name) + '</div>' +
         '<div class="cm">' + escHtml(p.concentration) + ' &middot; ' + p.sizeML + 'ml</div>' +
         cardPrice +
-        '<div class="cta">Ver y pedir &rarr;</div>' +
         '</div></a>'
 
       // Selector de tamaños para decants
@@ -416,124 +434,115 @@ export function Catalogo() {
       '</div>' +
       '</div>'
 
-    const css = [
-      '*{margin:0;padding:0;box-sizing:border-box}',
-      'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f4f2ee;color:#1a1a2e;min-height:100vh}',
-      '.wv-banner{display:none;background:#1e40af;color:#fff;padding:14px 18px;text-align:center}',
-      '.wv-banner strong{display:block;font-size:14px;font-weight:700;margin-bottom:3px}',
-      '.wv-banner span{display:block;font-size:12px;opacity:.85}',
-      'header{background:linear-gradient(135deg,#141212,#1e1a1a);padding:20px 28px;display:flex;align-items:center;gap:16px}',
-      '.lb{width:46px;height:46px;border-radius:11px;overflow:hidden;background:#2a2520;border:1px solid #3a3028;display:flex;align-items:center;justify-content:center;flex-shrink:0}',
-      '.lb img{width:100%;height:100%;object-fit:cover}',
-      '.li{font-size:20px;font-weight:800;color:#c8a96e}',
-      '.ht{flex:1;min-width:0}',
-      '.hn{color:#c8a96e;font-size:18px;font-weight:700;letter-spacing:-.2px}',
-      '.hs{color:#7a6545;font-size:12px;margin-top:2px}',
-      '.hd{color:#5e4e35;font-size:11px;white-space:nowrap}',
-      'main{max-width:1200px;margin:0 auto;padding:24px 20px calc(100px + env(safe-area-inset-bottom,0px))}',
-      '.bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;gap:10px;flex-wrap:wrap}',
-      '.cnt{font-size:13px;color:#999}',
-      '.sw{position:relative}',
-      '.sw input{padding:9px 14px 9px 38px;border:1.5px solid #ddd;border-radius:11px;font-size:14px;outline:none;width:230px;background:#fff;color:#333;transition:border-color .2s,box-shadow .2s;-webkit-appearance:none}',
-      '.sw input:focus{border-color:#7c3aed;box-shadow:0 0 0 3px rgba(124,58,237,.12)}',
-      '.sw svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#bbb;pointer-events:none}',
-      // Grid
-      '.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:16px}',
-      // Card
-      'a.card{text-decoration:none;color:inherit;display:flex;flex-direction:column;background:#fff;border-radius:16px;overflow:hidden;cursor:pointer;transition:transform .2s,box-shadow .2s;box-shadow:0 1px 4px rgba(0,0,0,.08);touch-action:manipulation;-webkit-tap-highlight-color:transparent}',
-      'a.card:hover{transform:translateY(-3px);box-shadow:0 10px 28px rgba(0,0,0,.12)}',
-      '.ci{aspect-ratio:1;background:linear-gradient(135deg,#faf7ef,#ece8dd);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0}',
-      '.ci img{width:100%;height:100%;object-fit:cover;transition:transform .3s}',
-      'a.card:hover .ci img{transform:scale(1.04)}',
-      '.ph{display:flex;align-items:center;justify-content:center;width:100%;height:100%}',
-      '.cb{padding:12px;display:flex;flex-direction:column;flex:1}',
-      '.badge{display:inline-block;font-size:10px;font-weight:700;padding:3px 8px;border-radius:6px;margin-bottom:7px;text-transform:uppercase;letter-spacing:.4px}',
-      '.bs{background:#dbeafe;color:#1e40af}.bt{background:#fef3c7;color:#92400e}.bd{background:#ede9fe;color:#5b21b6}.bf{background:#dcfce7;color:#14532d}',
-      '.ct{font-size:14px;font-weight:700;color:#111;line-height:1.3}',
-      '.cbr{font-size:12px;color:#777;margin-top:2px}',
-      '.cm{font-size:11px;color:#bbb;margin-top:2px}',
-      '.cprice{font-size:15px;font-weight:700;color:#7c3aed;margin-top:9px}',
-      '.consult{font-size:11px;color:#bbb;margin-top:9px;font-style:italic}',
-      '.chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:9px}',
-      '.chip{font-size:11px;font-weight:600;background:#ede9fe;color:#5b21b6;padding:3px 7px;border-radius:5px}',
-      '.cta{font-size:12px;color:#7c3aed;font-weight:600;margin-top:auto;padding-top:10px;display:flex;align-items:center;gap:3px}',
-      // Modal base — CSS :target (funciona sin JS en iOS Quick Look)
-      '.mow{display:none;position:fixed;inset:0;z-index:100;align-items:flex-end;justify-content:center;padding:0}',
-      '.mow:target{display:flex}',
-      '.mow-bg{position:absolute;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}',
-      '.mo{position:relative;z-index:1;background:#fff;border-radius:20px 20px 0 0;width:100%;max-width:480px;max-height:92vh;overflow-y:auto;-webkit-overflow-scrolling:touch;box-shadow:0 -8px 40px rgba(0,0,0,.18);animation:slideup .25s ease}',
-      '@media(min-width:600px){.mow{align-items:center;padding:20px}.mo{border-radius:20px;max-height:88vh}}',
-      '@keyframes slideup{from{transform:translateY(30px);opacity:0}to{transform:translateY(0);opacity:1}}',
-      '.mi{aspect-ratio:4/3;background:linear-gradient(135deg,#faf7ef,#ece8dd);display:flex;align-items:center;justify-content:center;overflow:hidden;border-radius:16px 16px 0 0}',
-      '@media(min-width:600px){.mi{border-radius:16px 16px 0 0}}',
-      '.mi img{width:100%;height:100%;object-fit:cover}',
-      '.mi .ph{font-size:80px}',
-      '.mb{padding:20px 20px calc(28px + env(safe-area-inset-bottom,0px))}',
-      '.mbg{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}',
-      '.mtit{font-size:22px;font-weight:800;color:#111;line-height:1.2}',
-      '.mbrnd{font-size:14px;color:#888;margin-top:3px}',
-      '.mmet{font-size:13px;color:#bbb;margin-top:2px}',
-      '.mnts{font-size:13px;color:#555;background:#faf8f4;border-left:3px solid #c8a96e;border-radius:0 8px 8px 0;padding:10px 13px;margin-top:12px;line-height:1.6}',
-      '.mpr{font-size:28px;font-weight:800;color:#7c3aed;margin-top:14px}',
-      // Size selector
-      '.sz-lbl{font-size:11px;font-weight:700;color:#888;margin-top:16px;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}',
-      '.sz-sel{display:flex;flex-wrap:wrap;gap:8px}',
-      '.sz-btn{background:#faf5ff;border:2px solid #ede9fe;border-radius:11px;padding:10px 14px;cursor:pointer;text-align:center;transition:all .15s;touch-action:manipulation;-webkit-tap-highlight-color:transparent;min-width:72px;outline:none}',
-      '.sz-btn:hover{border-color:#7c3aed;background:#ede9fe}',
-      '.sz-btn.active{border-color:#7c3aed;background:#7c3aed;color:#fff}',
-      '.sz-ml{display:block;font-size:15px;font-weight:800;line-height:1.2}',
-      '.sz-pr{display:block;font-size:11px;margin-top:3px;opacity:.75}',
-      '.sz-btn.active .sz-pr{opacity:.85}',
-      // Quantity + Add
-      '.act-row{display:flex;gap:10px;align-items:center;margin-top:16px}',
-      '.qty-ctl{display:flex;align-items:center;background:#faf5ff;border-radius:11px;overflow:hidden;border:1.5px solid #ede9fe;flex-shrink:0}',
-      '.qty-btn{width:38px;height:44px;border:none;background:transparent;font-size:20px;cursor:pointer;color:#7c3aed;font-weight:700;touch-action:manipulation;-webkit-tap-highlight-color:transparent;display:flex;align-items:center;justify-content:center;line-height:1}',
-      '.qty-btn:active{background:#ede9fe}',
-      '.qty-val{min-width:34px;text-align:center;font-size:16px;font-weight:800;color:#5b21b6}',
-      '.add-btn{flex:1;padding:12px 16px;background:#7c3aed;color:#fff;border:none;border-radius:11px;font-size:14px;font-weight:700;cursor:pointer;transition:background .15s,transform .1s;touch-action:manipulation;-webkit-tap-highlight-color:transparent;letter-spacing:.1px}',
-      '.add-btn:hover:not(.unready){background:#6d28d9}',
-      '.add-btn:active:not(.unready){transform:scale(.97)}',
-      '.add-btn.unready{background:#c4b5fd;cursor:default}',
-      '.add-btn.ok{background:#16a34a!important}',
-      // Shake animation for size selector
-      '@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-6px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}}',
-      '.shake{animation:shake .35s ease}',
-      // Close button
-      'a.xcl{position:absolute;top:12px;right:12px;width:36px;height:36px;background:rgba(255,255,255,.92);border-radius:50%;font-size:16px;display:flex;align-items:center;justify-content:center;text-decoration:none;color:#555;box-shadow:0 2px 8px rgba(0,0,0,.14);z-index:2;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);touch-action:manipulation;-webkit-tap-highlight-color:transparent;cursor:pointer;line-height:1}',
-      'a.xcl:hover{background:#fff;color:#111}',
-      // Cart bar — fixed bottom
-      '#cart-bar{position:fixed;bottom:0;left:0;right:0;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;text-decoration:none;padding:13px 20px;padding-bottom:calc(13px + env(safe-area-inset-bottom,0px));display:none;align-items:center;justify-content:space-between;cursor:pointer;z-index:50;box-shadow:0 -4px 24px rgba(124,58,237,.4);touch-action:manipulation;-webkit-tap-highlight-color:transparent}',
-      '.cb-l{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:500}',
-      '.cb-ic{font-size:17px}',
-      '.cb-r{display:flex;align-items:center;gap:6px}',
-      '.cb-total{font-size:15px;font-weight:800}',
-      '.cb-cta{font-size:12px;background:rgba(255,255,255,.2);padding:4px 10px;border-radius:20px;font-weight:600}',
-      // Cart modal
-      '.cart-mo{max-width:480px}',
-      '.cart-hdr{font-size:19px;font-weight:800;color:#111;margin-bottom:14px;padding-bottom:12px;border-bottom:1.5px solid #f0eee8}',
-      '.ci-row{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid #f5f3ef}',
-      '.ci-info{flex:1;min-width:0}',
-      '.ci-name{font-size:14px;font-weight:700;color:#111;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-      '.ci-det{font-size:12px;color:#888;margin-top:1px}',
-      '.ci-right{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex-shrink:0}',
-      '.ci-qty{display:flex;align-items:center;background:#faf5ff;border-radius:8px;overflow:hidden;border:1.5px solid #ede9fe}',
-      '.ci-qty button{width:30px;height:28px;border:none;background:transparent;font-size:14px;cursor:pointer;color:#7c3aed;font-weight:700;touch-action:manipulation;-webkit-tap-highlight-color:transparent;display:flex;align-items:center;justify-content:center}',
-      '.ci-qty button:active{background:#ede9fe}',
-      '.ci-qty span{min-width:22px;text-align:center;font-size:13px;font-weight:700;color:#5b21b6}',
-      '.ci-sub{font-size:13px;font-weight:700;color:#7c3aed}',
-      '.empty-cart{text-align:center;color:#ccc;padding:24px 0;font-style:italic;font-size:14px}',
-      '.cart-footer{margin-top:6px}',
-      '.cart-ttl-row{display:flex;justify-content:space-between;align-items:center;padding:14px 0 12px;border-top:2px solid #ede9fe;font-size:14px;font-weight:600;color:#555}',
-      '#cart-ttl{color:#7c3aed;font-size:20px;font-weight:800}',
-      '.wa-btn{width:100%;padding:15px;background:#25D366;color:#fff;border:none;border-radius:13px;font-size:15px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:9px;touch-action:manipulation;-webkit-tap-highlight-color:transparent;letter-spacing:.2px;box-shadow:0 4px 14px rgba(37,211,102,.35)}',
-      '.wa-btn:hover{background:#22c55e}',
-      '.wa-btn:active{transform:scale(.98)}',
-      '.cart-note{font-size:11px;color:#bbb;text-align:center;margin-top:10px;line-height:1.5;font-style:italic}',
-      'footer{text-align:center;padding:24px;color:#aaa;font-size:12px;border-top:1px solid #e8e4dc}',
-      'footer b{color:#9a7b3f}',
-      // Responsive
-      '@media(max-width:600px){.grid{grid-template-columns:repeat(2,1fr);gap:11px}main{padding:16px 12px calc(90px + env(safe-area-inset-bottom,0px))}header{padding:14px 16px}.hd{display:none}.sw input{width:170px}}',
-    ].join('\n')
+    const css = `
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Helvetica,Arial,sans-serif;background:#f4f2ee;color:#111;min-height:100vh;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+.wv-banner{display:none;background:#111;color:#fff;padding:12px 16px;text-align:center}
+.wv-banner strong{display:block;font-size:13px;font-weight:600;margin-bottom:2px}
+.wv-banner span{display:block;font-size:11px;opacity:.6}
+header{background:#fff;border-bottom:1px solid #e9e7e4;padding:0 28px;height:60px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:40}
+.lb{width:34px;height:34px;border-radius:6px;overflow:hidden;background:#f5efe0;border:1px solid #e8dcc8;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.lb img{width:100%;height:100%;object-fit:cover}
+.li{font-size:15px;font-weight:800;color:#8b6a3e}
+.ht{flex:1;min-width:0}
+.hn{color:#111;font-size:15px;font-weight:700;letter-spacing:-.3px;line-height:1}
+.hs{color:#bbb;font-size:9px;margin-top:2px;letter-spacing:.8px;text-transform:uppercase}
+.hd{color:#ccc;font-size:11px;white-space:nowrap}
+main{max-width:1440px;margin:0 auto;padding:28px 20px calc(100px + env(safe-area-inset-bottom,0px))}
+.bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;gap:12px;flex-wrap:wrap}
+.cnt{font-size:10px;color:#bbb;letter-spacing:.6px;text-transform:uppercase;font-weight:500}
+.sw{position:relative}
+.sw input{padding:10px 14px 10px 38px;border:1.5px solid #e8e5e0;border-radius:8px;font-size:13px;outline:none;width:220px;background:#fff;color:#111;-webkit-appearance:none;transition:border-color .15s,box-shadow .15s}
+.sw input:focus{border-color:#555;box-shadow:0 0 0 3px rgba(0,0,0,.05)}
+.sw input::placeholder{color:#ccc}
+.sw svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#ccc;pointer-events:none}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:18px}
+a.card{text-decoration:none;color:inherit;display:flex;flex-direction:column;background:#fff;border-radius:14px;overflow:hidden;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;transition:transform .22s ease,box-shadow .22s ease;box-shadow:0 1px 4px rgba(0,0,0,.06),0 2px 12px rgba(0,0,0,.05)}
+a.card:hover{transform:translateY(-4px);box-shadow:0 8px 28px rgba(0,0,0,.12)}
+a.card:hover .ci img{transform:scale(1.05)}
+.ci{aspect-ratio:3/4;background:#f2f0ec;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;position:relative}
+.ci img{width:100%;height:100%;object-fit:cover;transition:transform .45s ease;display:block}
+.ph{display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:linear-gradient(160deg,#f2f0ec,#e8e4dc)}
+.badge{font-size:8px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;padding:4px 8px;border-radius:3px;line-height:1}
+.cbadge{position:absolute;top:10px;left:10px;color:#fff;background:rgba(0,0,0,.52);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.bs,.bt,.bd{background:rgba(0,0,0,.52);color:#fff}
+.bf{display:none}
+.cb{padding:13px 14px 16px}
+.cbr{font-size:9px;font-weight:600;color:#aaa;text-transform:uppercase;letter-spacing:1.3px;margin-bottom:5px}
+.ct{font-size:14px;font-weight:500;color:#111;line-height:1.4}
+.cm{font-size:11px;color:#ccc;margin-top:3px}
+.cprice{font-size:14px;font-weight:600;color:#111;margin-top:9px}
+.consult{font-size:11px;color:#ccc;margin-top:9px;font-style:italic}
+.chips{display:none}
+.chip{display:none}
+.mow{display:none;position:fixed;inset:0;z-index:100;align-items:flex-end;justify-content:center;padding:0}
+.mow:target{display:flex}
+.mow-bg{position:absolute;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.mo{position:relative;z-index:1;background:#fff;border-radius:18px 18px 0 0;width:100%;max-width:480px;max-height:92vh;overflow-y:auto;-webkit-overflow-scrolling:touch;box-shadow:0 -4px 32px rgba(0,0,0,.16);animation:slideup .3s cubic-bezier(.32,.72,0,1)}
+@media(min-width:600px){.mow{align-items:center;padding:20px}.mo{border-radius:18px;max-height:88vh}}
+@keyframes slideup{from{transform:translateY(40px);opacity:0}to{transform:translateY(0);opacity:1}}
+.mi{aspect-ratio:1;background:#f5f4f1;display:flex;align-items:center;justify-content:center;overflow:hidden;border-radius:18px 18px 0 0}
+@media(min-width:600px){.mi{border-radius:18px 18px 0 0}}
+.mi img{width:100%;height:100%;object-fit:cover}
+.mb{padding:22px 22px calc(28px + env(safe-area-inset-bottom,0px))}
+.mbg{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.mbg .badge{background:#f0efed;color:#888;font-size:9px;padding:4px 9px;border-radius:4px}
+.mbg .bf{display:inline-block;background:#f0efed;color:#888}
+.mtit{font-size:22px;font-weight:700;color:#111;line-height:1.25;letter-spacing:-.4px}
+.mbrnd{font-size:10px;color:#aaa;margin-top:5px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px}
+.mmet{font-size:11px;color:#ccc;margin-top:3px}
+.mnts{font-size:13px;color:#555;border-left:2px solid #e4ddd0;padding:10px 14px;margin-top:16px;line-height:1.7;background:#faf8f5;border-radius:0 6px 6px 0}
+.mpr{font-size:30px;font-weight:700;color:#111;margin-top:18px;letter-spacing:-.5px}
+a.xcl{position:absolute;top:12px;right:12px;width:32px;height:32px;background:rgba(255,255,255,.88);border-radius:50%;font-size:14px;display:flex;align-items:center;justify-content:center;text-decoration:none;color:#555;box-shadow:0 1px 8px rgba(0,0,0,.14);z-index:2;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);touch-action:manipulation;-webkit-tap-highlight-color:transparent;cursor:pointer;line-height:1}
+.sz-lbl{font-size:10px;font-weight:600;color:#aaa;margin-top:20px;margin-bottom:10px;text-transform:uppercase;letter-spacing:.9px}
+.sz-sel{display:flex;flex-wrap:wrap;gap:8px}
+.sz-btn{background:#fff;border:1px solid #e4e2de;border-radius:5px;padding:11px 14px;cursor:pointer;text-align:center;transition:border-color .15s,background .15s;touch-action:manipulation;-webkit-tap-highlight-color:transparent;min-width:76px;outline:none}
+.sz-btn:hover{border-color:#666}
+.sz-btn.active{border-color:#111;background:#111;color:#fff}
+.sz-ml{display:block;font-size:15px;font-weight:700;line-height:1.2}
+.sz-pr{display:block;font-size:10px;margin-top:3px;opacity:.6}
+.sz-btn.active .sz-pr{opacity:.75}
+.act-row{display:flex;gap:10px;align-items:center;margin-top:18px}
+.qty-ctl{display:flex;align-items:center;background:#f5f4f1;border-radius:5px;overflow:hidden;border:1px solid #e4e2de;flex-shrink:0}
+.qty-btn{width:40px;height:46px;border:none;background:transparent;font-size:20px;cursor:pointer;color:#333;font-weight:400;touch-action:manipulation;-webkit-tap-highlight-color:transparent;display:flex;align-items:center;justify-content:center;line-height:1}
+.qty-btn:active{background:#eae8e4}
+.qty-val{min-width:32px;text-align:center;font-size:15px;font-weight:600;color:#111}
+.add-btn{flex:1;padding:14px 16px;background:#111;color:#fff;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s,transform .1s;touch-action:manipulation;-webkit-tap-highlight-color:transparent;letter-spacing:.3px}
+.add-btn:hover:not(.unready){background:#333}
+.add-btn:active:not(.unready){transform:scale(.98)}
+.add-btn.unready{background:#bbb;cursor:default}
+.add-btn.ok{background:#16a34a!important}
+@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-5px)}40%{transform:translateX(5px)}60%{transform:translateX(-3px)}80%{transform:translateX(3px)}}
+.shake{animation:shake .3s ease}
+#cart-bar{position:fixed;bottom:0;left:0;right:0;background:#111;color:#fff;text-decoration:none;padding:14px 24px;padding-bottom:calc(14px + env(safe-area-inset-bottom,0px));display:none;align-items:center;justify-content:space-between;cursor:pointer;z-index:50;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+.cb-l{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:400;color:rgba(255,255,255,.55);letter-spacing:.2px}
+.cb-ic{font-size:18px}
+.cb-r{display:flex;align-items:center;gap:10px}
+.cb-total{font-size:15px;font-weight:700;color:#fff}
+.cb-cta{font-size:11px;background:rgba(255,255,255,.12);padding:5px 14px;border-radius:4px;font-weight:600;color:#fff;letter-spacing:.2px}
+.cart-mo{max-width:480px}
+.cart-hdr{font-size:17px;font-weight:700;color:#111;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid #eae8e4;letter-spacing:-.2px}
+.ci-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #f3f1ee}
+.ci-info{flex:1;min-width:0}
+.ci-name{font-size:13px;font-weight:600;color:#111;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ci-det{font-size:11px;color:#bbb;margin-top:2px}
+.ci-right{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0}
+.ci-qty{display:flex;align-items:center;background:#f5f4f1;border-radius:4px;overflow:hidden;border:1px solid #e4e2de}
+.ci-qty button{width:28px;height:28px;border:none;background:transparent;font-size:14px;cursor:pointer;color:#333;touch-action:manipulation;-webkit-tap-highlight-color:transparent;display:flex;align-items:center;justify-content:center}
+.ci-qty button:active{background:#eae8e4}
+.ci-qty span{min-width:22px;text-align:center;font-size:13px;font-weight:600;color:#111}
+.ci-sub{font-size:12px;font-weight:600;color:#111}
+.empty-cart{text-align:center;color:#ccc;padding:32px 0;font-size:13px}
+.cart-footer{margin-top:10px}
+.cart-ttl-row{display:flex;justify-content:space-between;align-items:center;padding:16px 0 14px;border-top:1px solid #eae8e4;font-size:12px;font-weight:500;color:#999;text-transform:uppercase;letter-spacing:.4px}
+#cart-ttl{color:#111;font-size:22px;font-weight:700;letter-spacing:-.4px;text-transform:none}
+.wa-btn{width:100%;padding:15px;background:#25D366;color:#fff;border:none;border-radius:7px;font-size:15px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:9px;touch-action:manipulation;-webkit-tap-highlight-color:transparent;letter-spacing:.2px}
+.wa-btn:active{transform:scale(.98)}
+.cart-note{font-size:11px;color:#ccc;text-align:center;margin-top:12px;line-height:1.6}
+footer{text-align:center;padding:32px 20px;color:#ccc;font-size:10px;border-top:1px solid #e9e7e4;letter-spacing:.7px;text-transform:uppercase}
+footer b{color:#8b6a3e;font-weight:600}
+@media(max-width:640px){.grid{grid-template-columns:repeat(2,1fr);gap:12px}main{padding:16px 14px calc(90px + env(safe-area-inset-bottom,0px))}.bar{margin-bottom:16px}header{padding:0 16px}.hd{display:none}.sw input{width:148px}}
+`
 
     // JS del portal de pedidos
     const js = [
@@ -784,192 +793,222 @@ export function Catalogo() {
   }
 
   return (
-    <div>
-      <PageHeader
-        title="Catálogo"
-        subtitle="Productos disponibles para compartir con clientes"
-        action={
-          <div className="flex gap-2 flex-wrap">
-            <Button
-              variant="secondary"
-              icon={<Globe size={15} />}
-              onClick={publishGitHub}
-              disabled={publishing}
-            >
-              {publishing ? 'Publicando...' : 'Publicar en línea'}
-            </Button>
-            <Button variant="secondary" icon={<FileCode size={15} />} onClick={exportHTML}>
-              Exportar HTML
-            </Button>
-            <Button icon={<Download size={15} />} onClick={exportPDF}>
-              Exportar PDF
-            </Button>
-          </div>
-        }
-      />
+    <div className="min-h-full">
 
-      {/* Banner resultado de publicación */}
+      {/* ── Header ── */}
+      <div className="flex items-start justify-between mb-6 gap-4 flex-wrap">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900 tracking-tight">Catálogo</h1>
+          <p className="text-xs text-gray-400 mt-0.5">
+            {filtered.length} {filtered.length === 1 ? 'fragancia disponible' : 'fragancias disponibles'}
+          </p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="secondary" size="sm" icon={<Globe size={14} />} onClick={publishGitHub} disabled={publishing}>
+            {publishing ? 'Publicando...' : 'Publicar'}
+          </Button>
+          <Button variant="secondary" size="sm" icon={<FileCode size={14} />} onClick={exportHTML}>HTML</Button>
+          <Button variant="secondary" size="sm" icon={<Download size={14} />} onClick={exportPDF}>PDF</Button>
+        </div>
+      </div>
+
+      {/* ── Banners ── */}
       {publishedUrl && (
-        <div className="mb-5 bg-green-50 border border-green-200 rounded-xl p-4 flex items-start gap-3">
-          <Check size={18} className="text-green-600 mt-0.5 shrink-0" />
+        <div className="mb-5 bg-green-50 border border-green-100 rounded-2xl p-4 flex items-start gap-3">
+          <Check size={16} className="text-green-500 mt-0.5 shrink-0" />
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-green-800">¡Catálogo publicado correctamente!</p>
-            <p className="text-xs font-mono text-green-700 mt-1 break-all">{publishedUrl}</p>
-            <p className="text-xs text-green-500 mt-1">Puede tardar 1–2 minutos en actualizarse la primera vez.</p>
+            <p className="text-sm font-semibold text-green-800">Catálogo publicado</p>
+            <p className="text-xs font-mono text-green-600 mt-0.5 break-all">{publishedUrl}</p>
+            <p className="text-xs text-green-400 mt-0.5">Puede tardar 1–2 minutos en actualizarse.</p>
           </div>
-          <div className="flex items-center gap-2 shrink-0 flex-wrap">
-            <button
-              onClick={copyPublishedUrl}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg transition-colors"
-            >
-              {urlCopied ? <Check size={12} /> : <Copy size={12} />}
-              {urlCopied ? 'Copiado' : 'Copiar URL'}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button onClick={copyPublishedUrl}
+              className="flex items-center gap-1 px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg transition-colors">
+              {urlCopied ? <Check size={11} /> : <Copy size={11} />}
+              {urlCopied ? 'Copiado' : 'Copiar'}
             </button>
-            <a
-              href={`https://wa.me/?text=${encodeURIComponent('Nuestro catálogo de fragancias: ' + publishedUrl)}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#25D366] hover:bg-[#22c55e] text-white text-xs font-semibold rounded-lg transition-colors"
-            >
-              WhatsApp
+            <a href={`https://wa.me/?text=${encodeURIComponent('Nuestro catálogo: ' + publishedUrl)}`}
+              target="_blank" rel="noopener noreferrer"
+              className="px-2.5 py-1 bg-[#25D366] hover:bg-[#22c55e] text-white text-xs font-semibold rounded-lg transition-colors">
+              WA
             </a>
-            <button onClick={() => setPublishedUrl('')} className="p-1 text-green-400 hover:text-green-700 transition-colors">
-              <X size={14} />
+            <button onClick={() => setPublishedUrl('')} className="p-1 text-green-400 hover:text-green-600 transition-colors">
+              <X size={13} />
             </button>
           </div>
         </div>
       )}
       {publishError && (
-        <div className="mb-5 bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
-          <span className="text-red-500 font-bold shrink-0 mt-0.5">!</span>
+        <div className="mb-5 bg-red-50 border border-red-100 rounded-2xl p-4 flex items-center gap-3">
+          <span className="text-red-400 font-bold shrink-0 text-sm">!</span>
           <div className="flex-1">
-            <p className="text-sm font-semibold text-red-800">Error al publicar</p>
-            <p className="text-xs text-red-600 mt-0.5">{publishError}</p>
+            <p className="text-sm font-semibold text-red-700">Error al publicar</p>
+            <p className="text-xs text-red-500 mt-0.5">{publishError}</p>
           </div>
-          <button onClick={() => setPublishError('')} className="p-1 text-red-400 hover:text-red-600 transition-colors shrink-0">
-            <X size={14} />
+          <button onClick={() => setPublishError('')} className="p-1 text-red-300 hover:text-red-500 transition-colors shrink-0">
+            <X size={13} />
           </button>
         </div>
       )}
 
-      {/* Filtros */}
-      <div className="flex flex-wrap gap-3 mb-6">
-        <div className="relative flex-1 min-w-48">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
-            placeholder="Buscar perfume o marca..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
+      {/* ── Búsqueda + toggle filtros ── */}
+      <div className="space-y-3 mb-6">
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none" />
+            <input
+              className="w-full pl-9 pr-3 py-2 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 focus:bg-white transition-colors placeholder:text-gray-300"
+              placeholder="Buscar fragancia o marca..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+          <button
+            onClick={() => setShowFilters(v => !v)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-sm font-medium transition-colors cursor-pointer ${
+              showFilters || filterFamily !== 'all' || minPrice || maxPrice
+                ? 'bg-violet-50 border-violet-200 text-violet-700'
+                : 'bg-gray-50 border-gray-100 text-gray-500 hover:border-gray-200'
+            }`}
+          >
+            <SlidersHorizontal size={14} />
+            Filtros
+            {(filterFamily !== 'all' || minPrice || maxPrice) && (
+              <span className="w-1.5 h-1.5 rounded-full bg-violet-500" />
+            )}
+          </button>
         </div>
-        <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
-          {[{ value: 'all', label: 'Todos' }, { value: 'sealed', label: 'Sellados' }, { value: 'decant', label: 'Decants' }].map(opt => (
+
+        {/* Pills de tipo */}
+        <div className="flex gap-2 overflow-x-auto pb-0.5 [scrollbar-width:none] [-webkit-overflow-scrolling:touch]">
+          {([
+            { value: 'all', label: 'Todos' },
+            { value: 'sealed', label: 'Sellados' },
+            { value: 'decant', label: 'Decants' },
+          ] as const).map(opt => (
             <button
               key={opt.value}
-              onClick={() => setFilterType(opt.value as 'all' | 'sealed' | 'decant')}
-              className={`px-3 py-1 rounded-md text-sm cursor-pointer transition-colors ${filterType === opt.value ? 'bg-white text-violet-700 shadow-sm font-medium' : 'text-gray-600 hover:text-gray-900'}`}
+              onClick={() => setFilterType(opt.value)}
+              className={`flex-none px-4 py-1.5 rounded-full text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                filterType === opt.value ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              }`}
             >
               {opt.label}
             </button>
           ))}
+          <div className="w-px bg-gray-100 self-stretch mx-1 shrink-0" />
+          {families.map(f => (
+            <button
+              key={f.value}
+              onClick={() => setFilterFamily(prev => prev === f.value ? 'all' : f.value)}
+              className={`flex-none px-3 py-1.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                filterFamily === f.value ? 'bg-violet-600 text-white' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
         </div>
-        <select
-          className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500"
-          value={filterFamily}
-          onChange={e => setFilterFamily(e.target.value)}
-        >
-          <option value="all">Todas las familias</option>
-          {families.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
-        </select>
-        <input
-          type="number"
-          placeholder="Precio mín."
-          className="w-28 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500"
-          value={minPrice}
-          onChange={e => setMinPrice(e.target.value)}
-        />
-        <input
-          type="number"
-          placeholder="Precio máx."
-          className="w-28 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500"
-          value={maxPrice}
-          onChange={e => setMaxPrice(e.target.value)}
-        />
+
+        {/* Panel filtros avanzados */}
+        {showFilters && (
+          <div className="flex gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
+            <div className="flex-1">
+              <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1 block">Precio mínimo</label>
+              <input type="number" placeholder="Gs. 0"
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white"
+                value={minPrice} onChange={e => setMinPrice(e.target.value)} />
+            </div>
+            <div className="flex-1">
+              <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1 block">Precio máximo</label>
+              <input type="number" placeholder="Sin límite"
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white"
+                value={maxPrice} onChange={e => setMaxPrice(e.target.value)} />
+            </div>
+            {(minPrice || maxPrice) && (
+              <button onClick={() => { setMinPrice(''); setMaxPrice('') }}
+                className="self-end p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors cursor-pointer">
+                <X size={13} />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
-      <p className="text-sm text-gray-500 mb-4">{filtered.length} producto{filtered.length !== 1 ? 's' : ''} disponible{filtered.length !== 1 ? 's' : ''}</p>
-
-      {/* Grid de productos */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-        {filtered.map(p => {
-          const availableSizes = [
-            { sizeML: 3, sellingPricePYG: p.price3ML ?? 0 },
-            { sizeML: 5, sellingPricePYG: p.price5ML ?? 0 },
-            { sizeML: 10, sellingPricePYG: p.price10ML ?? 0 },
-            { sizeML: 30, sellingPricePYG: p.price30ML ?? 0 },
-          ].filter(s => s.sellingPricePYG > 0)
-          return (
-            <div
-              key={p.id}
-              className="bg-white border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition-shadow cursor-pointer"
-              onClick={() => setSelectedProduct(p)}
-            >
-              <div className="aspect-square bg-gradient-to-br from-amber-50 to-stone-100 overflow-hidden">
-                {p.imageIds?.[0] ? (
-                  <CatalogThumb imageId={p.imageIds[0]} />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center">
-                    <ImagePlaceholder size={48} />
-                  </div>
-                )}
-              </div>
-              <div className="p-3">
-                <Badge color={p.type === 'sealed' ? 'blue' : p.type === 'tester' ? 'yellow' : 'violet'}>
-                  {p.type === 'sealed' ? 'Sellado' : p.type === 'tester' ? 'Tester' : 'Decants'}
-                </Badge>
-                <p className="font-semibold text-gray-900 mt-2 text-sm leading-tight">{p.name}</p>
-                <p className="text-xs text-gray-500">{p.brand}</p>
-                <p className="text-xs text-gray-400 mt-0.5">{p.concentration} · {p.sizeML}ml</p>
-                {p.type === 'sealed' || p.type === 'tester' ? (
-                  <p className="text-sm font-bold text-violet-600 mt-2">{fmtPYG(p.sellingPricePYG)}</p>
-                ) : (
+      {/* ── Grid / Empty state ── */}
+      {filtered.length === 0 ? (
+        <div className="text-center py-24">
+          <div className="w-16 h-16 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-4">
+            <ImagePlaceholder size={36} />
+          </div>
+          <p className="text-gray-500 font-medium">Sin fragancias disponibles</p>
+          <p className="text-sm text-gray-300 mt-1">
+            {search || filterFamily !== 'all' || filterType !== 'all'
+              ? 'Probá con otros filtros'
+              : 'Agregá stock desde Inventario'}
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+          {filtered.map(p => {
+            const availableSizes = [
+              { sizeML: 3, sellingPricePYG: p.price3ML ?? 0 },
+              { sizeML: 5, sellingPricePYG: p.price5ML ?? 0 },
+              { sizeML: 10, sellingPricePYG: p.price10ML ?? 0 },
+              { sizeML: 30, sellingPricePYG: p.price30ML ?? 0 },
+            ].filter(s => s.sellingPricePYG > 0)
+            const minDecantPrice = availableSizes.length > 0
+              ? Math.min(...availableSizes.map(s => s.sellingPricePYG)) : null
+            const typeLabel = p.type === 'sealed' ? 'Sellado' : p.type === 'tester' ? 'Tester' : 'Decant'
+            const typePill = p.type === 'sealed'
+              ? 'bg-sky-500/10 text-sky-700'
+              : p.type === 'tester' ? 'bg-amber-500/10 text-amber-700'
+              : 'bg-violet-500/10 text-violet-700'
+            return (
+              <button
+                key={p.id}
+                className="group text-left bg-white rounded-2xl overflow-hidden border border-gray-100 hover:shadow-lg hover:border-gray-200 hover:-translate-y-0.5 transition-all duration-200 cursor-pointer"
+                onClick={() => setSelectedProduct(p)}
+              >
+                {/* Imagen portrait */}
+                <div className="relative aspect-[3/4] bg-gradient-to-b from-stone-50 to-stone-100 overflow-hidden">
+                  {p.imageIds?.[0] ? (
+                    <CatalogThumb imageId={p.imageIds[0]} />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <ImagePlaceholder size={52} />
+                    </div>
+                  )}
+                  <span className={`absolute top-2 left-2 text-[10px] font-semibold px-2 py-0.5 rounded-full backdrop-blur-sm ${typePill}`}>
+                    {typeLabel}
+                  </span>
+                </div>
+                {/* Info */}
+                <div className="p-3">
+                  <p className="text-[9px] font-bold text-gray-300 uppercase tracking-widest truncate">{p.brand}</p>
+                  <p className="text-sm font-semibold text-gray-900 leading-snug mt-0.5 line-clamp-2 group-hover:text-violet-700 transition-colors">
+                    {p.name}
+                  </p>
                   <div className="mt-2">
-                    {availableSizes.length > 0 ? (
-                      <div className="flex flex-wrap gap-1">
-                        {availableSizes.map(b => (
-                          <div key={b.sizeML} className="text-xs bg-violet-50 text-violet-700 rounded px-1.5 py-0.5">
-                            {b.sizeML}ml · {fmtPYG(b.sellingPricePYG)}
-                          </div>
-                        ))}
-                      </div>
+                    {p.type === 'sealed' || p.type === 'tester' ? (
+                      p.sellingPricePYG > 0
+                        ? <p className="text-sm font-bold text-gray-900">{fmtPYG(p.sellingPricePYG)}</p>
+                        : <p className="text-xs text-gray-300 italic">A consultar</p>
                     ) : (
-                      <p className="text-xs text-gray-400">Ver disponibilidad</p>
+                      minDecantPrice
+                        ? <p className="text-sm font-bold text-gray-900">desde {fmtPYG(minDecantPrice)}</p>
+                        : <p className="text-xs text-gray-300 italic">Ver disponibilidad</p>
                     )}
                   </div>
-                )}
-                {(p.type === 'sealed' || p.type === 'tester') && (
-                  <p className="text-xs text-gray-400 mt-1">Stock: {p.stockSealed} u.</p>
-                )}
-              </div>
-            </div>
-          )
-        })}
-      </div>
-
-      {filtered.length === 0 && (
-        <div className="text-center py-16">
-          <BookImage size={48} className="mx-auto text-gray-300 mb-4" />
-          <p className="text-gray-500 font-medium">No hay productos disponibles</p>
-          <p className="text-sm text-gray-400">Agrega stock en el módulo de Inventario</p>
+                </div>
+              </button>
+            )
+          })}
         </div>
       )}
 
       {selectedProduct && (
-        <ProductModal
-          product={selectedProduct}
-          onClose={() => setSelectedProduct(null)}
-        />
+        <ProductModal product={selectedProduct} onClose={() => setSelectedProduct(null)} />
       )}
     </div>
   )

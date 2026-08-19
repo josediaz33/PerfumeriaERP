@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { Plus, TrendingUp, TrendingDown, Filter, Edit2, Trash2 } from 'lucide-react'
 import { db } from '../db/db'
@@ -37,8 +38,13 @@ const categoryColors: Record<MovementCategory, 'green' | 'red' | 'orange' | 'blu
 }
 
 export function Contabilidad() {
+  const location = useLocation()
+  const navState = location.state as { highlightId?: number; month?: string } | null
+  const highlightId = navState?.highlightId
+  const highlightRef = useRef<HTMLTableRowElement | null>(null)
+
   const accounts = useLiveQuery(() => db.accounts.filter(a => a.isActive !== false).toArray()) ?? []
-  const [filterMonth, setFilterMonth] = useState(() => today().slice(0, 7))
+  const [filterMonth, setFilterMonth] = useState(() => navState?.month ?? today().slice(0, 7))
   const [filterType, setFilterType] = useState<'all' | 'income' | 'expense'>('all')
   const [filterAccount, setFilterAccount] = useState<string>('all')
 
@@ -55,6 +61,19 @@ export function Contabilidad() {
   const income = movements.filter(m => m.type === 'income').reduce((s, m) => s + m.amount, 0)
   const expense = movements.filter(m => m.type === 'expense').reduce((s, m) => s + m.amount, 0)
   const balance = income - expense
+
+  // Scroll y highlight al movimiento indicado por navegación desde Logística.
+  // Se usa requestAnimationFrame para garantizar que el DOM ya tiene la fila renderizada.
+  useEffect(() => {
+    if (!highlightId || movements.length === 0) return
+    const exists = movements.some(m => m.id === highlightId)
+    if (!exists) return
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        highlightRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      })
+    })
+  }, [movements, highlightId])
 
   const [showNew, setShowNew] = useState(false)
   const [editMovement, setEditMovement] = useState<Movement | null>(null)
@@ -268,7 +287,11 @@ export function Contabilidad() {
                   const account = accounts.find(a => a.id === m.accountId)
                   const cat = categories.find(c => c.value === m.category)
                   return (
-                    <tr key={m.id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                    <tr
+                      key={m.id}
+                      ref={m.id === highlightId ? highlightRef : undefined}
+                      className={`border-b border-gray-50 hover:bg-gray-50 transition-colors ${m.id === highlightId ? 'bg-violet-50 outline outline-1 outline-violet-300' : ''}`}
+                    >
                       <td className="px-5 py-3 text-gray-500">{fmtDate(m.date)}</td>
                       <td className="px-5 py-3 text-gray-900">{m.description}</td>
                       <td className="px-5 py-3">

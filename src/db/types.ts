@@ -264,6 +264,7 @@ export interface AdvancePayment {
   accountId: number
   commission?: number
   notes?: string
+  movementId?: number  // ID del movimiento contable asociado — permite navegar desde Logística
 }
 
 export interface LocalOrder {

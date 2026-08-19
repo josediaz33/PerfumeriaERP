@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { Plus, MapPin, Package, Check, Clock, Truck, X as XIcon, Edit2, Trash2, AlertTriangle } from 'lucide-react'
 import { db } from '../db/db'
@@ -31,6 +32,7 @@ function findSupplyForSize(supplyList: Supply[], sizeML: number): Supply | undef
 }
 
 export function Logistica() {
+  const navigate = useNavigate()
   const products = useLiveQuery(() => db.products.toArray()) ?? []
   const supplies = useLiveQuery(() => db.supplies.toArray()) ?? []
   const orders = useLiveQuery(() => db.localOrders.orderBy('orderDate').reverse().toArray()) ?? []
@@ -225,22 +227,16 @@ export function Logistica() {
     const now = nowISO()
     const hasComm = señaForm.method === 'card' || señaForm.method === 'qr'
     const commission = hasComm ? Math.round(amount * 0.033) : 0
-    const newSeña: AdvancePayment = {
-      amount, date: señaForm.date, method: señaForm.method,
-      accountId: parseInt(señaForm.accountId),
-      commission: commission > 0 ? commission : undefined,
-      notes: señaForm.notes || undefined,
-    }
-    const updatedSeñas = [...(order.advancePayments ?? []), newSeña]
     await db.transaction('rw', [db.localOrders, db.accounts, db.movements], async () => {
-      await db.movements.add({
+      // Guardar el movId para poder navegar a Contabilidad desde la etiqueta de seña
+      const movId = await db.movements.add({
         type: 'income', category: 'sale',
         amount,
         accountId: parseInt(señaForm.accountId),
         description: `Pago anticipado — ${order.customerName}`,
         referenceId: señaOrderId!, referenceType: 'local_order',
         date: señaForm.date, createdAt: now,
-      })
+      }) as number
       await db.accounts.where('id').equals(parseInt(señaForm.accountId)).modify(a => { a.balance += amount })
       if (commission > 0) {
         await db.movements.add({
@@ -253,6 +249,14 @@ export function Logistica() {
         })
         await db.accounts.where('id').equals(parseInt(señaForm.accountId)).modify(a => { a.balance -= commission })
       }
+      const newSeña: AdvancePayment = {
+        amount, date: señaForm.date, method: señaForm.method,
+        accountId: parseInt(señaForm.accountId),
+        commission: commission > 0 ? commission : undefined,
+        notes: señaForm.notes || undefined,
+        movementId: movId,
+      }
+      const updatedSeñas = [...(order.advancePayments ?? []), newSeña]
       await db.localOrders.update(señaOrderId!, { advancePayments: updatedSeñas, updatedAt: now })
     })
     setShowSeña(false)
@@ -353,7 +357,7 @@ export function Logistica() {
       const linkedSale = await db.sales.where('referenceId').equals(order.id!).first()
       const allMovs = await db.movements.where('referenceId').equals(order.id!).filter(m => m.referenceType === 'local_order').toArray()
       // Revertir solo los movimientos de la entrega — las señas quedan como ingreso registrado
-      const deliveryMovs = allMovs.filter(m => !m.description.startsWith('Seña —'))
+      const deliveryMovs = allMovs.filter(m => !m.description.startsWith('Pago anticipado —'))
       await db.transaction('rw', [db.localOrders, db.accounts, db.movements, db.sales, db.saleItems], async () => {
         for (const m of deliveryMovs) {
           if (m.type === 'income') {
@@ -679,7 +683,15 @@ export function Logistica() {
                           {o.isPreOrder && <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-medium">Pre-pedido</span>}
                           {o.budgetId && <span className="text-xs bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-medium">Pres. #{String(o.budgetId).padStart(4, '0')}</span>}
                           {(o.advancePayments?.length ?? 0) > 0 && (
-                            <span className="text-xs bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded font-medium">
+                            <span
+                              onClick={e => {
+                                e.stopPropagation()
+                                const first = o.advancePayments![0]
+                                navigate('/contabilidad', { state: { highlightId: first.movementId, month: first.date.slice(0, 7) } })
+                              }}
+                              title="Ver en Contabilidad"
+                              className="text-xs bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded font-medium cursor-pointer hover:bg-violet-200 transition-colors"
+                            >
                               Seña {fmtPYG(o.advancePayments!.reduce((s, p) => s + p.amount, 0))}
                             </span>
                           )}
@@ -1057,12 +1069,56 @@ export function Logistica() {
                 return (
                   <>
                     <div className="border-t border-gray-200 pt-1 mt-1">
-                      {selectedOrder.advancePayments!.map((p, i) => (
-                        <div key={i} className="flex justify-between text-xs text-violet-600">
-                          <span>Seña {fmtDate(p.date)} ({p.method})</span>
-                          <span>{fmtPYG(p.amount)}</span>
-                        </div>
-                      ))}
+                      {selectedOrder.advancePayments!.map((p, i) => {
+                        const isOrphan = !p.movementId
+                        return (
+                          <div key={i} className="flex items-center gap-1 group">
+                            <div
+                              className={`flex-1 flex justify-between text-xs rounded px-1.5 py-1 ${
+                                isOrphan
+                                  ? 'text-amber-700 bg-amber-50 border border-amber-200 cursor-default'
+                                  : 'text-violet-600 cursor-pointer hover:bg-violet-50 hover:text-violet-800'
+                              }`}
+                              onClick={() => {
+                                if (isOrphan) return
+                                setShowDetail(null)
+                                navigate('/contabilidad', { state: { highlightId: p.movementId, month: p.date.slice(0, 7) } })
+                              }}
+                              title={isOrphan ? 'Sin movimiento contable — eliminá y volvé a registrar' : 'Ver en Contabilidad'}
+                            >
+                              <span>{isOrphan ? '⚠ Sin registro · ' : '↗ '}Seña {fmtDate(p.date)} ({p.method})</span>
+                              <span>{fmtPYG(p.amount)}</span>
+                            </div>
+                            <button
+                              className={`p-0.5 rounded transition-all cursor-pointer shrink-0 ${
+                                isOrphan
+                                  ? 'text-amber-400 hover:text-red-500 hover:bg-red-50'
+                                  : 'opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400 hover:bg-red-50'
+                              }`}
+                              title={isOrphan ? 'Eliminar seña sin registro — el saldo quedará libre' : 'Eliminar seña'}
+                              onClick={async () => {
+                                const msg = isOrphan
+                                  ? '¿Eliminar esta seña? No tiene movimiento contable, solo se borrará del pedido y el saldo quedará libre para re-registrarla.'
+                                  : '¿Eliminar esta seña? El movimiento contable y el saldo de la cuenta serán revertidos.'
+                                if (!confirm(msg)) return
+                                await db.transaction('rw', [db.localOrders, db.accounts, db.movements], async () => {
+                                  if (p.movementId) {
+                                    const mov = await db.movements.get(p.movementId)
+                                    if (mov) {
+                                      await db.accounts.where('id').equals(mov.accountId).modify(a => { a.balance -= mov.amount })
+                                      await db.movements.delete(p.movementId)
+                                    }
+                                  }
+                                  const updated = (selectedOrder.advancePayments ?? []).filter((_, j) => j !== i)
+                                  await db.localOrders.update(selectedOrder.id!, { advancePayments: updated, updatedAt: nowISO() })
+                                })
+                              }}
+                            >
+                              <XIcon size={11} />
+                            </button>
+                          </div>
+                        )
+                      })}
                       <div className="flex justify-between font-semibold text-violet-700 mt-1">
                         <span>Saldo pendiente</span>
                         <span>{fmtPYG(Math.max(0, selectedOrder.totalAmount - señaTotal))}</span>
