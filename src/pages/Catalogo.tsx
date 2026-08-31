@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { Search, Download, FileCode, X, Globe, Copy, Check, SlidersHorizontal } from 'lucide-react'
+import { Search, Download, FileCode, X, Globe, Copy, Check, SlidersHorizontal, Eye, EyeOff } from 'lucide-react'
 import { db, getConfig } from '../db/db'
 import type { Product, OlfactiveFamily } from '../db/types'
 import { fmtPYG } from '../lib/format'
@@ -176,12 +176,18 @@ export function Catalogo() {
   const [urlCopied, setUrlCopied] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
 
-  const available = products.filter(p => {
+  // Para el export (HTML/PDF): respeta catalogVisible=true como "forzar visible sin stock"
+  const catalogAvailable = products.filter(p => {
     if (p.catalogVisible === false) return false
+    if (p.catalogVisible === true) return true  // forzado visible aunque sin stock
     if (p.type === 'sealed' && p.stockSealed <= 0) return false
     if (p.type === 'decant_source' && p.stockOpenML <= 0) return false
     return true
   })
+
+  // Para la vista interna de gestión: muestra TODOS los no-explícitamente-ocultos
+  // (incluyendo sin stock) para poder togglear la visibilidad de cualquiera
+  const available = products.filter(p => p.catalogVisible !== false)
 
   const filtered = available.filter(p => {
     if (filterType === 'sealed' && p.type !== 'sealed') return false
@@ -192,6 +198,29 @@ export function Catalogo() {
     if (maxPrice && p.sellingPricePYG > parseInt(maxPrice)) return false
     return true
   })
+
+  // Toggle visibilidad en catálogo:
+  // - Sin stock, no forzado (undefined) → true (forzar visible)
+  // - Sin stock, forzado (true)         → undefined (vuelve a oculto por stock)
+  // - Con stock, visible (undefined)    → false (ocultar explícitamente)
+  // - Con stock, oculto (false)         → undefined (restaurar)
+  // - Forzado (true) y con stock        → undefined (quitar forzado, pero sigue visible por stock)
+  async function toggleCatalogVisible(p: Product) {
+    const hasStock = (p.type === 'sealed' && p.stockSealed > 0)
+      || (p.type === 'decant_source' && p.stockOpenML > 0)
+      || (p.type === 'tester' && (p.stockSealed ?? 0) > 0)
+
+    let next: boolean | undefined
+    if (p.catalogVisible === false) {
+      next = undefined  // restaurar a por-stock
+    } else if (p.catalogVisible === true) {
+      next = undefined  // quitar forzado
+    } else {
+      // undefined: decide por stock
+      next = hasStock ? false : true
+    }
+    await db.products.update(p.id!, { catalogVisible: next })
+  }
 
   async function exportPDF() {
     const { default: jsPDF } = await import('jspdf')
@@ -291,7 +320,9 @@ export function Catalogo() {
     const logoImg = await db.images.get('business-logo')
     const logoSrc = logoImg ? await blobToBase64(logoImg.blob) : null
 
-    const n = filtered.length
+    // El export usa catalogAvailable (no los filtros de la vista interna)
+    const exportProducts = catalogAvailable
+    const n = exportProducts.length
     const date = new Date().toLocaleDateString('es-PY', { year: 'numeric', month: 'long', day: 'numeric' })
 
     const logoHtml = logoSrc
@@ -300,7 +331,7 @@ export function Catalogo() {
 
     // Objeto de datos de producto para el JS del portal
     const pdData: Record<number, { name: string; brand: string; type: string; price: number }> = {}
-    filtered.forEach(p => {
+    exportProducts.forEach(p => {
       pdData[p.id!] = {
         name: p.name,
         brand: p.brand,
@@ -310,7 +341,7 @@ export function Catalogo() {
     })
 
     // Generar tarjeta + modal por producto
-    const productItems = await Promise.all(filtered.map(async p => {
+    const productItems = await Promise.all(exportProducts.map(async p => {
       let imgTag = '<div class="ph"><svg width="54" height="54" viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="18" y="26" width="20" height="22" rx="5" fill="#e2dbd2"/><rect x="22" y="17" width="12" height="10" rx="3" fill="#e2dbd2"/><rect x="25" y="11" width="6" height="7" rx="2" fill="#d4cabf"/><rect x="26.5" y="7" width="3" height="5" rx="1.5" fill="#c4b8aa"/><rect x="22" y="30" width="3" height="12" rx="1.5" fill="#ede8e1"/></svg></div>'
       if (p.imageIds?.[0]) {
         const img = await db.images.get(p.imageIds[0])
@@ -964,10 +995,36 @@ footer b{color:#8b6a3e;font-weight:600}
               ? 'bg-sky-500/10 text-sky-700'
               : p.type === 'tester' ? 'bg-amber-500/10 text-amber-700'
               : 'bg-violet-500/10 text-violet-700'
+
+            const hasStock = (p.type === 'sealed' && p.stockSealed > 0)
+              || (p.type === 'decant_source' && p.stockOpenML > 0)
+              || (p.type === 'tester' && (p.stockSealed ?? 0) > 0)
+            const isForced = p.catalogVisible === true
+            const isHidden = p.catalogVisible === false
+            // Mensaje y colores del botón ojo
+            const eyeTitle = isForced
+              ? 'Forzado visible (sin stock igual aparece en catálogo) — clic para quitar'
+              : isHidden
+                ? 'Oculto del catálogo — clic para restaurar'
+                : hasStock
+                  ? 'Visible en catálogo (hay stock) — clic para ocultar'
+                  : 'Sin stock: no está en catálogo — clic para forzar visible'
+            const eyeBtnClass = isForced
+              ? 'bg-green-500 text-white'
+              : isHidden
+                ? 'bg-red-500 text-white'
+                : hasStock
+                  ? 'bg-white/70 text-gray-400 hover:bg-white/90 hover:text-gray-700'
+                  : 'bg-orange-400 text-white'
+
             return (
               <button
                 key={p.id}
-                className="group text-left bg-white rounded-2xl overflow-hidden border border-gray-100 hover:shadow-lg hover:border-gray-200 hover:-translate-y-0.5 transition-all duration-200 cursor-pointer"
+                className={`group text-left bg-white rounded-2xl overflow-hidden border transition-all duration-200 cursor-pointer ${
+                  !hasStock && !isForced
+                    ? 'border-orange-100 opacity-60 hover:opacity-80'
+                    : 'border-gray-100 hover:shadow-lg hover:border-gray-200 hover:-translate-y-0.5'
+                }`}
                 onClick={() => setSelectedProduct(p)}
               >
                 {/* Imagen portrait */}
@@ -979,14 +1036,29 @@ footer b{color:#8b6a3e;font-weight:600}
                       <ImagePlaceholder size={52} />
                     </div>
                   )}
+                  {/* Badge tipo */}
                   <span className={`absolute top-2 left-2 text-[10px] font-semibold px-2 py-0.5 rounded-full backdrop-blur-sm ${typePill}`}>
                     {typeLabel}
                   </span>
+                  {/* Botón visibilidad catálogo */}
+                  <button
+                    title={eyeTitle}
+                    onClick={e => { e.stopPropagation(); toggleCatalogVisible(p) }}
+                    className={`absolute top-2 right-2 p-1 rounded-full backdrop-blur-sm transition-colors cursor-pointer ${eyeBtnClass}`}
+                  >
+                    {isHidden || (!hasStock && !isForced) ? <EyeOff size={11} /> : <Eye size={11} />}
+                  </button>
+                  {/* Badge "Sin stock" para productos no forzados */}
+                  {!hasStock && !isForced && (
+                    <div className="absolute bottom-0 inset-x-0 bg-orange-400/80 backdrop-blur-sm text-white text-[9px] font-semibold text-center py-0.5">
+                      Sin stock
+                    </div>
+                  )}
                 </div>
                 {/* Info */}
                 <div className="p-3">
                   <p className="text-[9px] font-bold text-gray-300 uppercase tracking-widest truncate">{p.brand}</p>
-                  <p className="text-sm font-semibold text-gray-900 leading-snug mt-0.5 line-clamp-2 group-hover:text-violet-700 transition-colors">
+                  <p className={`text-sm font-semibold leading-snug mt-0.5 line-clamp-2 transition-colors ${!hasStock && !isForced ? 'text-gray-400' : 'text-gray-900 group-hover:text-violet-700'}`}>
                     {p.name}
                   </p>
                   <div className="mt-2">

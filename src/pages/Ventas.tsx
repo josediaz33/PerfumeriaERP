@@ -399,7 +399,7 @@ export function Ventas() {
     await db.sales.delete(sale.id!)
   }
 
-  const decantProducts = products.filter(p => p.stockOpenML > 0)
+  const decantProducts = products.filter(p => p.type === 'decant_source')
   const sealedProducts = products.filter(p => p.type === 'sealed' || p.type === 'tester')
 
   return (
@@ -664,7 +664,7 @@ export function Ventas() {
                   ...(addType === 'sealed' ? sealedProducts : decantProducts).map(p => ({
                     value: String(p.id),
                     label: addType === 'partial'
-                      ? `${p.brand} — ${p.name} (${p.stockOpenML}ml disponibles)`
+                      ? `${p.brand} — ${p.name} (${p.stockOpenML > 0 ? p.stockOpenML + 'ml' : 'sin stock'})`
                       : `${p.brand} — ${p.name}`,
                   })),
                 ]}

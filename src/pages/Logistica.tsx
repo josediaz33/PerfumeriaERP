@@ -775,9 +775,9 @@ export function Logistica() {
                           : item.type === 'tester'
                             ? products.filter(p => p.type === 'tester')
                             : item.type === 'decant' || item.type === 'partial'
-                              ? products.filter(p => p.stockOpenML > 0)
+                              ? products.filter(p => p.type === 'decant_source')
                               : products
-                      ).map(p => ({ value: String(p.id), label: (item.type === 'decant' || item.type === 'partial') ? `${p.brand} — ${p.name} (${p.stockOpenML}ml)` : `${p.brand} — ${p.name}` }))]} />
+                      ).map(p => ({ value: String(p.id), label: (item.type === 'decant' || item.type === 'partial') ? `${p.brand} — ${p.name} (${p.stockOpenML > 0 ? p.stockOpenML + 'ml' : 'sin stock'})` : `${p.brand} — ${p.name}` }))]} />
                   )}
                   <Select value={item.type} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, type: e.target.value as any, productId: '0', supplyId: '' } : x) }))}
                     options={[{ value: 'sealed', label: 'Sellado' }, { value: 'tester', label: 'Tester' }, { value: 'decant', label: 'Decant' }, { value: 'partial', label: 'Parcial' }, { value: 'supply', label: 'Insumo' }]} />

@@ -128,7 +128,7 @@ export function Presupuestos() {
   }
 
   const sealedProds = products.filter(p => p.type === 'sealed' || p.type === 'tester')
-  const decantProds = products.filter(p => p.stockOpenML > 0)
+  const decantProds = products.filter(p => p.type === 'decant_source')
 
   function getProductsForType(t: BudgetLineItem['type']) {
     if (t === 'sealed' || t === 'tester') return sealedProds

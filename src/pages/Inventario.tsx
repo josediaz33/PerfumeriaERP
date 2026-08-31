@@ -224,6 +224,7 @@ export function Inventario() {
           type: form.type, sellingPricePYG: parseFloat(form.sellingPricePYG) || 0,
           minStock: parseInt(form.minStock) || 1, notes: form.notes,
           costPYG: parseFloat(form.costPYG) || 0,
+          catalogVisible: form.catalogVisible,
           stockSealed: newStockSealed,
           stockOpenML: newStockOpenML,
           updatedAt: now, ...decantPrices,
@@ -262,6 +263,7 @@ export function Inventario() {
         type: form.type, sellingPricePYG: parseFloat(form.sellingPricePYG) || 0,
         minStock: parseInt(form.minStock) || 1, notes: form.notes,
         costPYG: 0, costUSD: 0, exchangeRateUsed: 7500,
+        catalogVisible: form.catalogVisible,
         stockSealed: 0, stockOpenML: 0,
         createdAt: now, updatedAt: now, ...decantPrices,
       })
