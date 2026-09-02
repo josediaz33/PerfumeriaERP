@@ -99,13 +99,15 @@ export function Presupuestos() {
         unitCost = p.costPYG
         costDetail = `CPP: ${fmtPYG(Math.round(p.costPYG))}`
       } else if (item.type === 'decant') {
-        const cpm = p.type === 'decant_source' ? p.costPYG : p.costPYG / p.sizeML
+        // TODO(PROVISIONAL-CATEGORY): sizeML ?? 1 para evitar división por undefined en no-fragancias
+        const cpm = p.type === 'decant_source' ? p.costPYG : p.costPYG / (p.sizeML ?? 1)
         const supply = findSupplyForSize(supplies, sizeML)
         const supplyCost = supply?.costPYG ?? 0
         unitCost = cpm * sizeML + supplyCost
         costDetail = `${fmtPYG(Math.round(cpm * sizeML))} líquido + ${fmtPYG(supplyCost)} frasco`
       } else if (item.type === 'partial') {
-        const cpm = p.type === 'decant_source' ? p.costPYG : p.costPYG / p.sizeML
+        // TODO(PROVISIONAL-CATEGORY): sizeML ?? 1 para evitar división por undefined en no-fragancias
+        const cpm = p.type === 'decant_source' ? p.costPYG : p.costPYG / (p.sizeML ?? 1)
         unitCost = cpm * sizeML
         costDetail = `CPM: ${fmtPYG(Math.round(cpm))}/ml`
       }

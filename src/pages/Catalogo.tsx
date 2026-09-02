@@ -118,7 +118,12 @@ function ProductModal({ product, onClose }: { product: Product; onClose: () => v
           {/* Nombre y marca */}
           <h2 className="text-[22px] font-bold text-gray-900 leading-tight tracking-tight">{product.name}</h2>
           <p className="text-sm text-gray-400 font-medium mt-0.5 uppercase tracking-wide">{product.brand}</p>
-          <p className="text-xs text-gray-300 mt-1">{product.concentration} · {product.sizeML}ml</p>
+          {/* TODO(PROVISIONAL-CATEGORY): mostrar info según categoría del producto */}
+          <p className="text-xs text-gray-300 mt-1">
+            {(product.category ?? 'fragrance') === 'watch'
+              ? 'Reloj'
+              : [product.concentration, product.sizeML ? `${product.sizeML}ml` : null].filter(Boolean).join(' · ')}
+          </p>
 
           {/* Notas */}
           {product.notes && (
@@ -382,7 +387,8 @@ export function Catalogo() {
         '<div class="cb">' +
         '<div class="cbr">' + escHtml(p.brand) + '</div>' +
         '<div class="ct">' + escHtml(p.name) + '</div>' +
-        '<div class="cm">' + escHtml(p.concentration) + ' &middot; ' + p.sizeML + 'ml</div>' +
+        /* TODO(PROVISIONAL-CATEGORY): mostrar info según categoría en el catálogo exportado */
+        '<div class="cm">' + (p.category === 'watch' ? 'Reloj' : (escHtml(p.concentration ?? '') + (p.sizeML ? ' &middot; ' + p.sizeML + 'ml' : ''))) + '</div>' +
         cardPrice +
         '</div></a>'
 
@@ -420,7 +426,8 @@ export function Catalogo() {
         '<div class="mbg"><span class="badge ' + bc + '">' + bl + '</span>' + famBadge + '</div>' +
         '<div class="mtit">' + escHtml(p.name) + '</div>' +
         '<div class="mbrnd">' + escHtml(p.brand) + '</div>' +
-        '<div class="mmet">' + escHtml(p.concentration) + ' &middot; ' + p.sizeML + 'ml</div>' +
+        /* TODO(PROVISIONAL-CATEGORY): mostrar info según categoría en modal del catálogo exportado */
+        '<div class="mmet">' + (p.category === 'watch' ? 'Reloj' : (escHtml(p.concentration ?? '') + (p.sizeML ? ' &middot; ' + p.sizeML + 'ml' : ''))) + '</div>' +
         (p.notes ? '<div class="mnts">' + escHtml(p.notes) + '</div>' : '') +
         modalPrice +
         sizeSelector +

@@ -117,7 +117,8 @@ export function Ventas() {
 
     if (addType === 'sealed') {
       unitCost = product.costPYG
-      label = `${product.brand} — ${product.name} ${product.sizeML}ml (sellado)`
+      // TODO(PROVISIONAL-CATEGORY): sizeML puede ser undefined para relojes/general
+      label = `${product.brand} — ${product.name}${product.sizeML ? ` ${product.sizeML}ml` : ''} (sellado)`
 
       // Compute FIFO lot origin info
       const qty = parseInt(addQty) || 1
@@ -143,7 +144,8 @@ export function Ventas() {
     } else if (addType === 'decant') {
       const size = parseInt(addSize)
       sizeML = size
-      const cpm = product.type === 'decant_source' ? product.costPYG : product.costPYG / product.sizeML
+      // TODO(PROVISIONAL-CATEGORY): sizeML ?? 1 para evitar división por undefined en no-fragancias
+      const cpm = product.type === 'decant_source' ? product.costPYG : product.costPYG / (product.sizeML ?? 1)
       const batch = batches.find(b => b.productId === productId && b.sizeML === size)
       const supplyCost = batch ? (batch.costPerDecant - cpm * size) : 0
       unitCost = cpm * size + supplyCost
@@ -151,7 +153,8 @@ export function Ventas() {
     } else if (addType === 'partial') {
       const ml = parseInt(addPartialML)
       sizeML = ml
-      const cpm = product.type === 'decant_source' ? product.costPYG : product.costPYG / product.sizeML
+      // TODO(PROVISIONAL-CATEGORY): sizeML ?? 1 para evitar división por undefined en no-fragancias
+      const cpm = product.type === 'decant_source' ? product.costPYG : product.costPYG / (product.sizeML ?? 1)
       unitCost = cpm * ml
       label = `${product.brand} — ${product.name} ${ml}ml (parcial)`
     }

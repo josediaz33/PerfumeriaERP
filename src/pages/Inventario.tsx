@@ -2,7 +2,7 @@ import { useState, Fragment, useRef, useEffect } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { Plus, Package, Search, AlertTriangle, Edit2, Trash2, Info, ChevronDown, ChevronRight, Truck, X, Droplets, ImageIcon, Upload } from 'lucide-react'
 import { db } from '../db/db'
-import type { Concentration, OlfactiveFamily, Product, ProductType, StockEntry } from '../db/types'
+import type { Concentration, OlfactiveFamily, Product, ProductCategory, ProductType, StockEntry } from '../db/types'
 import { fmtPYG, fmtUSD, fmtDate, today, nowISO } from '../lib/format'
 import { compressImage, createObjectURL } from '../lib/images'
 
@@ -35,7 +35,10 @@ const families: { value: OlfactiveFamily; label: string }[] = [
 ]
 
 const emptyDefForm = {
-  name: '', brand: '', olfactiveFamily: 'floral' as OlfactiveFamily,
+  name: '', brand: '',
+  // TODO(PROVISIONAL-CATEGORY): defaults fragancia; se ignoran si category !== 'fragrance'
+  category: 'fragrance' as ProductCategory,
+  olfactiveFamily: 'floral' as OlfactiveFamily,
   concentration: 'EDP' as Concentration, sizeML: '100',
   type: 'sealed' as ProductType, sellingPricePYG: '', minStock: '1', notes: '',
   costPYG: '0', stockSealed: '0', stockOpenML: '0',
@@ -68,6 +71,8 @@ export function Inventario() {
   const [search, setSearch] = useState('')
   const [filterType, setFilterType] = useState<'all' | ProductType>('all')
   const [filterFamily, setFilterFamily] = useState<string>('all')
+  // TODO(PROVISIONAL-CATEGORY): filtro por categoría provisional hasta Fase 6
+  const [filterCategory, setFilterCategory] = useState<'all' | ProductCategory>('all')
   const [expandedProductId, setExpandedProductId] = useState<number | null>(null)
 
   const [showForm, setShowForm] = useState(false)
@@ -102,7 +107,13 @@ export function Inventario() {
 
   const filtered = products.filter(p => {
     if (filterType !== 'all' && p.type !== filterType) return false
-    if (filterFamily !== 'all' && p.olfactiveFamily !== filterFamily) return false
+    // TODO(PROVISIONAL-CATEGORY): filtro por categoría (undefined = 'fragrance' retrocompat)
+    if (filterCategory !== 'all') {
+      const pCat = p.category ?? 'fragrance'
+      if (pCat !== filterCategory) return false
+    }
+    // Familia olfativa solo aplica a fragancias
+    if (filterFamily !== 'all' && (p.category ?? 'fragrance') === 'fragrance' && p.olfactiveFamily !== filterFamily) return false
     if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.brand.toLowerCase().includes(search.toLowerCase())) return false
     return true
   })
@@ -130,8 +141,12 @@ export function Inventario() {
   async function openEdit(p: typeof products[0]) {
     setEditId(p.id!)
     setForm({
-      name: p.name, brand: p.brand, olfactiveFamily: p.olfactiveFamily,
-      concentration: p.concentration, sizeML: String(p.sizeML),
+      name: p.name, brand: p.brand,
+      // TODO(PROVISIONAL-CATEGORY): category undefined = 'fragrance' retrocompat
+      category: p.category ?? 'fragrance',
+      olfactiveFamily: p.olfactiveFamily ?? 'floral',
+      concentration: p.concentration ?? 'EDP',
+      sizeML: String(p.sizeML ?? 100),
       type: p.type, sellingPricePYG: String(p.sellingPricePYG),
       minStock: String(p.minStock), notes: p.notes ?? '',
       catalogVisible: p.catalogVisible !== false,
@@ -218,9 +233,14 @@ export function Inventario() {
       const newStockOpenML = parseFloat(form.stockOpenML) || 0
 
       await db.transaction('rw', db.products, db.stockEntries, async () => {
+        // TODO(PROVISIONAL-CATEGORY): campos fragancia solo se guardan si category === 'fragrance'
+        const isFragrance = form.category === 'fragrance'
         await db.products.update(editId, {
-          name: form.name, brand: form.brand, olfactiveFamily: form.olfactiveFamily,
-          concentration: form.concentration, sizeML: parseFloat(form.sizeML),
+          name: form.name, brand: form.brand,
+          category: form.category,
+          olfactiveFamily: isFragrance ? form.olfactiveFamily : undefined,
+          concentration: isFragrance ? form.concentration : undefined,
+          sizeML: isFragrance ? (parseFloat(form.sizeML) || undefined) : undefined,
           type: form.type, sellingPricePYG: parseFloat(form.sellingPricePYG) || 0,
           minStock: parseInt(form.minStock) || 1, notes: form.notes,
           costPYG: parseFloat(form.costPYG) || 0,
@@ -257,9 +277,14 @@ export function Inventario() {
         }
       })
     } else {
+      // TODO(PROVISIONAL-CATEGORY): campos fragancia solo se guardan si category === 'fragrance'
+      const isFragrance = form.category === 'fragrance'
       await db.products.add({
-        name: form.name, brand: form.brand, olfactiveFamily: form.olfactiveFamily,
-        concentration: form.concentration, sizeML: parseFloat(form.sizeML),
+        name: form.name, brand: form.brand,
+        category: form.category,
+        olfactiveFamily: isFragrance ? form.olfactiveFamily : undefined,
+        concentration: isFragrance ? form.concentration : undefined,
+        sizeML: isFragrance ? (parseFloat(form.sizeML) || undefined) : undefined,
         type: form.type, sellingPricePYG: parseFloat(form.sellingPricePYG) || 0,
         minStock: parseInt(form.minStock) || 1, notes: form.notes,
         costPYG: 0, costUSD: 0, exchangeRateUsed: 7500,
@@ -278,8 +303,10 @@ export function Inventario() {
     const existingDecant = products.find(
       x => x.name === p.name && x.brand === p.brand && x.type === 'decant_source'
     )
-    const costPerML = Math.round(p.costPYG / p.sizeML)
-    const costUSDPerML = p.costUSD > 0 ? Math.round((p.costUSD / p.sizeML) * 1000) / 1000 : 0
+    // TODO(PROVISIONAL-CATEGORY): sizeML puede ser undefined para productos no-fragancia
+    const effSizeML = p.sizeML ?? 1
+    const costPerML = Math.round(p.costPYG / effSizeML)
+    const costUSDPerML = p.costUSD > 0 ? Math.round((p.costUSD / effSizeML) * 1000) / 1000 : 0
     const entryNotes = `Apertura de ${p.brand} — ${p.name} (sellado)`
 
     await db.transaction('rw', db.products, db.stockEntries, async () => {
@@ -306,18 +333,18 @@ export function Inventario() {
       // 3. Agregar ML al producto decant_source (existente o nuevo) + lote de trazabilidad
       if (existingDecant) {
         const newCPP = existingDecant.stockOpenML > 0
-          ? Math.round((existingDecant.stockOpenML * existingDecant.costPYG + p.costPYG) / (existingDecant.stockOpenML + p.sizeML))
+          ? Math.round((existingDecant.stockOpenML * existingDecant.costPYG + p.costPYG) / (existingDecant.stockOpenML + effSizeML))
           : costPerML
         await db.products.update(existingDecant.id!, {
-          stockOpenML: existingDecant.stockOpenML + p.sizeML,
+          stockOpenML: existingDecant.stockOpenML + effSizeML,
           costPYG: newCPP,
           updatedAt: now,
         })
         await db.stockEntries.add({
           productId: existingDecant.id!,
           type: 'decant_source',
-          quantity: p.sizeML,
-          quantityRemaining: p.sizeML,
+          quantity: effSizeML,
+          quantityRemaining: effSizeML,
           costUSD: costUSDPerML,
           exchangeRate: p.exchangeRateUsed,
           costPYG: costPerML,
@@ -326,9 +353,11 @@ export function Inventario() {
           createdAt: now,
         })
       } else {
+        // TODO(PROVISIONAL-CATEGORY): propaga category al producto decant_source
         const newId = await db.products.add({
           name: p.name,
           brand: p.brand,
+          category: p.category ?? 'fragrance',
           olfactiveFamily: p.olfactiveFamily,
           concentration: p.concentration,
           sizeML: p.sizeML,
@@ -339,7 +368,7 @@ export function Inventario() {
           costUSD: costUSDPerML,
           exchangeRateUsed: p.exchangeRateUsed,
           stockSealed: 0,
-          stockOpenML: p.sizeML,
+          stockOpenML: effSizeML,
           catalogVisible: false,
           price3ML: p.price3ML,
           price5ML: p.price5ML,
@@ -352,8 +381,8 @@ export function Inventario() {
         await db.stockEntries.add({
           productId: newId as number,
           type: 'decant_source',
-          quantity: p.sizeML,
-          quantityRemaining: p.sizeML,
+          quantity: effSizeML,
+          quantityRemaining: effSizeML,
           costUSD: costUSDPerML,
           exchangeRate: p.exchangeRateUsed,
           costPYG: costPerML,
@@ -376,8 +405,10 @@ export function Inventario() {
       x => x.name === p.name && x.brand === p.brand && x.type === 'decant_source'
     )
     const mlToMigrate = p.stockOpenML
-    const costPerML = Math.round(p.costPYG / p.sizeML)
-    const costUSDPerML = p.costUSD > 0 ? Math.round((p.costUSD / p.sizeML) * 1000) / 1000 : 0
+    // TODO(PROVISIONAL-CATEGORY): sizeML puede ser undefined para no-fragancias
+    const effSizeML = p.sizeML ?? 1
+    const costPerML = Math.round(p.costPYG / effSizeML)
+    const costUSDPerML = p.costUSD > 0 ? Math.round((p.costUSD / effSizeML) * 1000) / 1000 : 0
     const entryNotes = `Migración desde ${p.brand} — ${p.name} (sellado)`
 
     await db.transaction('rw', db.products, db.stockEntries, async () => {
@@ -405,9 +436,11 @@ export function Inventario() {
           createdAt: now,
         })
       } else {
+        // TODO(PROVISIONAL-CATEGORY): propaga category al producto decant_source
         const newId = await db.products.add({
           name: p.name,
           brand: p.brand,
+          category: p.category ?? 'fragrance',
           olfactiveFamily: p.olfactiveFamily,
           concentration: p.concentration,
           sizeML: p.sizeML,
@@ -857,8 +890,8 @@ export function Inventario() {
       </div>
 
       {/* Filtros */}
-      <div className="flex gap-3 mb-4">
-        <div className="relative flex-1">
+      <div className="flex gap-3 mb-4 flex-wrap">
+        <div className="relative flex-1 min-w-48">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
             className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
@@ -867,6 +900,13 @@ export function Inventario() {
             onChange={e => setSearch(e.target.value)}
           />
         </div>
+        {/* TODO(PROVISIONAL-CATEGORY): filtro por categoría — provisional hasta Fase 6 */}
+        <select className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500" value={filterCategory} onChange={e => setFilterCategory(e.target.value as typeof filterCategory)}>
+          <option value="all">Todas las categorías</option>
+          <option value="fragrance">Fragancias</option>
+          <option value="watch">Relojes</option>
+          <option value="general">General</option>
+        </select>
         <select className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500" value={filterType} onChange={e => setFilterType(e.target.value as typeof filterType)}>
           <option value="all">Todos los tipos</option>
           <option value="sealed">Sellados</option>
@@ -947,7 +987,13 @@ export function Inventario() {
                             )}
                             <div>
                               <p className="font-medium text-gray-900">{p.name}</p>
-                              <p className="text-xs text-gray-500">{p.brand} · {p.concentration} · {p.sizeML}ml</p>
+                              {/* TODO(PROVISIONAL-CATEGORY): mostrar info según categoría */}
+                              <p className="text-xs text-gray-500">
+                                {p.brand}
+                                {(p.category ?? 'fragrance') === 'fragrance' && p.concentration && ` · ${p.concentration}`}
+                                {(p.category ?? 'fragrance') === 'fragrance' && p.sizeML && ` · ${p.sizeML}ml`}
+                                {p.category === 'watch' && ' · Reloj'}
+                              </p>
                             </div>
                           </div>
                         </td>
@@ -1176,9 +1222,29 @@ export function Inventario() {
         <div className="grid grid-cols-2 gap-4">
           <Input label="Nombre" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Ej: Baccarat Rouge 540" />
           <Input label="Marca" value={form.brand} onChange={e => setForm(f => ({ ...f, brand: e.target.value }))} placeholder="Ej: Maison Francis Kurkdjian" />
-          <Select label="Concentración" value={form.concentration} onChange={e => setForm(f => ({ ...f, concentration: e.target.value as Concentration }))} options={concentrations.map(c => ({ value: c, label: c }))} />
-          <Select label="Familia olfativa" value={form.olfactiveFamily} onChange={e => setForm(f => ({ ...f, olfactiveFamily: e.target.value as OlfactiveFamily }))} options={families.map(f => ({ value: f.value, label: f.label }))} />
-          <Input label="Tamaño (ml)" type="number" value={form.sizeML} onChange={e => setForm(f => ({ ...f, sizeML: e.target.value }))} />
+          {/* TODO(PROVISIONAL-CATEGORY): selector de categoría — provisional hasta Fase 6 */}
+          <div className="col-span-2">
+            <Select
+              label="Categoría del producto"
+              value={form.category}
+              onChange={e => setForm(f => ({ ...f, category: e.target.value as ProductCategory }))}
+              options={[
+                { value: 'fragrance', label: 'Fragancia (perfume)' },
+                { value: 'watch', label: 'Reloj' },
+                { value: 'general', label: 'General / Otro' },
+              ]}
+            />
+            <p className="text-xs text-amber-600 mt-1">
+              ⚠ Provisional — en Fase 6 (BD relacional) cada categoría tendrá su propio módulo
+            </p>
+          </div>
+          {form.category === 'fragrance' && (
+            <>
+              <Select label="Concentración" value={form.concentration} onChange={e => setForm(f => ({ ...f, concentration: e.target.value as Concentration }))} options={concentrations.map(c => ({ value: c, label: c }))} />
+              <Select label="Familia olfativa" value={form.olfactiveFamily} onChange={e => setForm(f => ({ ...f, olfactiveFamily: e.target.value as OlfactiveFamily }))} options={families.map(f => ({ value: f.value, label: f.label }))} />
+              <Input label="Tamaño (ml)" type="number" value={form.sizeML} onChange={e => setForm(f => ({ ...f, sizeML: e.target.value }))} />
+            </>
+          )}
           <Select label="Tipo" value={form.type} onChange={e => {
             const newType = e.target.value as ProductType
             const sizeML = parseFloat(form.sizeML) || 1
@@ -1208,7 +1274,13 @@ export function Inventario() {
           )}
           <Input label="Stock mínimo (alerta)" type="number" value={form.minStock} onChange={e => setForm(f => ({ ...f, minStock: e.target.value }))} />
           <div className="col-span-2">
-            <Textarea label="Notas olfativas" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2} placeholder="Familia, notas de salida / corazón / fondo..." />
+            <Textarea
+              label={form.category === 'fragrance' ? 'Notas olfativas' : 'Notas / descripción'}
+              value={form.notes}
+              onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+              rows={2}
+              placeholder={form.category === 'fragrance' ? 'Familia, notas de salida / corazón / fondo...' : 'Descripción, referencias, detalles del producto...'}
+            />
           </div>
 
           {/* Visibilidad en catálogo */}
@@ -1323,7 +1395,7 @@ export function Inventario() {
                   value={editLoteForm.quantity}
                   onChange={e => setEditLoteForm(f => ({ ...f, quantity: e.target.value }))}
                 />
-                {isDecantEditLote && editLoteQty > 0 && (
+                {isDecantEditLote && editLoteQty > 0 && editLoteSizeML > 1 && (
                   <p className="text-xs text-blue-500 mt-1">{editLoteQty} × {editLoteSizeML}ml = {editLoteQty * editLoteSizeML}ml</p>
                 )}
               </div>

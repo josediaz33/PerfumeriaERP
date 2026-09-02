@@ -40,6 +40,12 @@ export interface Movement {
 }
 
 export type ProductType = 'sealed' | 'tester' | 'decant_source'
+
+// TODO(PROVISIONAL-CATEGORY): Opción A — campo `category` para distinguir tipos de producto
+// (fragrancias, relojes, general). PROVISIONAL hasta migración a base de datos relacional (Fase 6).
+// En la fase relacional cada categoría tendrá su propia tabla con campos específicos.
+export type ProductCategory = 'fragrance' | 'watch' | 'general'
+
 export type Concentration = 'EDP' | 'EDT' | 'EDC' | 'EXP' | 'PARFUM' | 'OTHER'
 export type OlfactiveFamily =
   | 'floral'
@@ -57,9 +63,11 @@ export interface Product {
   id?: number
   name: string
   brand: string
-  olfactiveFamily: OlfactiveFamily
-  concentration: Concentration
-  sizeML: number
+  // TODO(PROVISIONAL-CATEGORY): en Fase 6 estos campos pasan a tabla 'fragrances'
+  category?: ProductCategory   // undefined = 'fragrance' por retrocompatibilidad
+  olfactiveFamily?: OlfactiveFamily  // solo fragancias
+  concentration?: Concentration      // solo fragancias
+  sizeML?: number                    // solo fragancias (ml de la botella)
   costUSD: number
   exchangeRateUsed: number
   costPYG: number
@@ -216,10 +224,12 @@ export type OrderStatus = 'pending' | 'confirmed' | 'shipped' | 'received' | 'ca
 export interface OrderItem {
   productName: string
   brand: string
-  sizeML: number
+  // TODO(PROVISIONAL-CATEGORY): sizeML es opcional para productos no-fragancia (ej. relojes)
+  sizeML?: number
   quantity: number
   unitPriceUSD: number
   type?: ProductType
+  category?: ProductCategory  // propagado del producto al crear la orden
 }
 
 export interface Order {

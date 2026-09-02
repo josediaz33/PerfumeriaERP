@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { Plus, Truck, Globe, DollarSign, Package, ChevronDown, ChevronUp, Trash2, X as XIcon, Edit2 } from 'lucide-react'
 import { db } from '../db/db'
 import type { Order, OrderStatus, ProductType } from '../db/types'
+// TODO(PROVISIONAL-CATEGORY): importar ProductCategory — provisional hasta Fase 6
 import { fmtPYG, fmtUSD, fmtDate, today, nowISO } from '../lib/format'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
@@ -101,7 +102,9 @@ export function Proveedores() {
     const orderData = {
       supplierId: parseInt(oForm.supplierId),
       items: items.map(i => ({
-        productName: i.productName, brand: i.brand, sizeML: parseFloat(i.sizeML),
+        productName: i.productName, brand: i.brand,
+        // TODO(PROVISIONAL-CATEGORY): sizeML opcional para productos no-fragancia (ej. relojes)
+        sizeML: parseFloat(i.sizeML) || undefined,
         quantity: parseInt(i.quantity), unitPriceUSD: parseFloat(i.unitPriceUSD),
         type: i.type,
       })),
@@ -123,10 +126,11 @@ export function Proveedores() {
         )
         if (!exists) {
           const itemType = item.type ?? 'sealed'
+          // TODO(PROVISIONAL-CATEGORY): sin category ni olfactiveFamily hardcodeados;
+          // el usuario deberá editar el producto en Inventario para completar sus datos.
           await db.products.add({
             name: item.productName, brand: item.brand,
-            olfactiveFamily: 'other', concentration: 'EDP',
-            sizeML: parseFloat(item.sizeML),
+            sizeML: item.sizeML,  // undefined para relojes/general
             costUSD: parseFloat(item.unitPriceUSD),
             exchangeRateUsed: exchangeRate,
             costPYG: Math.round(parseFloat(item.unitPriceUSD) * exchangeRate),
@@ -227,11 +231,12 @@ export function Proveedores() {
 
         const itemType = item.type ?? 'sealed'
         const isDecant = existing ? existing.type === 'decant_source' : itemType === 'decant_source'
-        // Para decant_source usar siempre el sizeML del ítem: el usuario especificó
-        // exactamente cuántos ML compró (puede ser diferente al sizeML del producto,
-        // ej: 3ml de un producto definido como botella de 100ml). Para sellado/tester
-        // preferir el sizeML del producto existente para consistencia.
-        const sizeML = isDecant ? item.sizeML : (existing?.sizeML ?? item.sizeML)
+        // TODO(PROVISIONAL-CATEGORY): sizeML puede ser undefined para relojes/general
+        // Para decant_source usar siempre el sizeML del ítem; para sellado/tester preferir
+        // el del producto existente; fallback a 1 (seguro para no-fragancias).
+        const sizeML = isDecant
+          ? (item.sizeML ?? existing?.sizeML ?? 1)
+          : (existing?.sizeML ?? item.sizeML ?? 1)
 
         // For decant_source: qty = total ML, costUSD = per ML
         const qty = isDecant ? item.quantity * sizeML : item.quantity
@@ -265,9 +270,11 @@ export function Proveedores() {
             type: existing.type, date: receiveDate, createdAt: now,
           })
         } else {
+          // TODO(PROVISIONAL-CATEGORY): sin olfactiveFamily/concentration hardcodeados;
+          // completar datos del producto en Inventario luego de la recepción.
           const productId = await db.products.add({
-            name: item.productName, brand: item.brand, olfactiveFamily: 'other',
-            concentration: 'EDP', sizeML: item.sizeML,
+            name: item.productName, brand: item.brand,
+            sizeML: item.sizeML,  // undefined para relojes/general
             costUSD, exchangeRateUsed: exchangeRate,
             costPYG: batchCostPYG, sellingPricePYG: 0,
             stockSealed: isDecant ? 0 : qty,
@@ -336,7 +343,8 @@ export function Proveedores() {
       ...editPendingOrder.items[idx],
       productName: fi.productName,
       brand: fi.brand,
-      sizeML: parseFloat(fi.sizeML) || 0,
+      // TODO(PROVISIONAL-CATEGORY): sizeML opcional para no-fragancias
+      sizeML: parseFloat(fi.sizeML) || undefined,
       quantity: parseInt(fi.quantity) || 1,
       unitPriceUSD: parseFloat(fi.unitPriceUSD) || 0,
       type: fi.type,
@@ -411,7 +419,8 @@ export function Proveedores() {
         if (!matchedItem) continue
 
         const isDecant = product.type === 'decant_source'
-        const sizeML = product.sizeML || matchedItem.sizeML
+        // TODO(PROVISIONAL-CATEGORY): sizeML puede ser undefined para relojes/general
+        const sizeML = product.sizeML ?? matchedItem.sizeML ?? 1
         const itemQty = matchedItem.quantity
         const myUSD = matchedItem.unitPriceUSD * itemQty
         const myShippingPYG = newTotalUSD > 0 ? newShipping * (myUSD / (newTotalUSD)) : 0
@@ -723,7 +732,8 @@ export function Proveedores() {
                                     <tr key={idx} className="border-t border-gray-100">
                                       <td className="py-1.5 text-gray-700">{item.brand}</td>
                                       <td className="py-1.5 text-gray-700">{item.productName}</td>
-                                      <td className="py-1.5 text-right text-gray-500">{item.sizeML}ml</td>
+                                      {/* TODO(PROVISIONAL-CATEGORY): sizeML opcional para no-fragancias */}
+                                      <td className="py-1.5 text-right text-gray-500">{item.sizeML != null ? `${item.sizeML}ml` : '—'}</td>
                                       <td className="py-1.5 text-right text-gray-700 font-medium">×{item.quantity}</td>
                                       <td className="py-1.5 text-right text-gray-700">
                                         {o.localCurrency ? fmtPYG(item.unitPriceUSD) : fmtUSD(item.unitPriceUSD)}
@@ -847,14 +857,16 @@ export function Proveedores() {
                             key={p.id}
                             type="button"
                             onMouseDown={() => {
-                              setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, productName: p.name, brand: p.brand, sizeML: String(p.sizeML), type: p.type } : x) }))
+                              // TODO(PROVISIONAL-CATEGORY): sizeML puede ser undefined para relojes/general
+                              setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, productName: p.name, brand: p.brand, sizeML: p.sizeML != null ? String(p.sizeML) : '', type: p.type } : x) }))
                               setActiveItemSearch(null)
                             }}
                             className="w-full flex items-center gap-2 px-3 py-2 hover:bg-violet-50 text-left text-sm border-b border-gray-50 last:border-0"
                           >
                             <span className="text-gray-400 text-xs shrink-0">{p.brand}</span>
                             <span className="font-medium text-gray-900 flex-1 truncate">{p.name}</span>
-                            <span className="text-xs text-gray-400 shrink-0">{p.sizeML}ml</span>
+                            {p.sizeML != null && <span className="text-xs text-gray-400 shrink-0">{p.sizeML}ml</span>}
+                            {p.sizeML == null && p.category === 'watch' && <span className="text-xs text-gray-400 shrink-0">Reloj</span>}
                           </button>
                         ))}
                       </div>
@@ -970,7 +982,8 @@ export function Proveedores() {
                   )
                   return (
                     <div key={i} className="flex items-center justify-between text-sm">
-                      <span className="text-gray-700">{item.brand} — {item.productName} {item.sizeML}ml ×{item.quantity}
+                      {/* TODO(PROVISIONAL-CATEGORY): sizeML opcional para no-fragancias */}
+                      <span className="text-gray-700">{item.brand} — {item.productName}{item.sizeML != null ? ` ${item.sizeML}ml` : ''} ×{item.quantity}
                         {receivingOrder.localCurrency && <span className="text-gray-400 ml-1">· {fmtPYG(item.unitPriceUSD)}/u.</span>}
                       </span>
                       {matched ? (
