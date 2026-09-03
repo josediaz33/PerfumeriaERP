@@ -10,7 +10,7 @@
 
 ---
 
-## Estado actual — v2.2
+## Estado actual — v2.5
 
 | Fase | Estado | Descripción |
 |------|--------|-------------|
@@ -24,7 +24,7 @@
 
 ## Descripción
 
-JODA Parfums ERP es una aplicación web diseñada específicamente para negocios de perfumería que manejan productos sellados, testers y producción de decants (fraccionamiento). Cubre el ciclo completo: desde la gestión de stock y producción hasta presupuestos, logística de entrega, contabilidad y análisis de rentabilidad.
+JODA Parfums ERP es una aplicación web diseñada para negocios de perfumería que manejan productos sellados, testers, relojes y producción de decants (fraccionamiento). Cubre el ciclo completo: desde la gestión de stock y producción hasta presupuestos, logística de entrega, contabilidad y análisis de rentabilidad.
 
 Toda la información se almacena localmente en el navegador mediante **IndexedDB** (Dexie.js v5), lo que garantiza privacidad total, uso sin conexión y cero costos de infraestructura.
 
@@ -35,172 +35,122 @@ Toda la información se almacena localmente en el navegador mediante **IndexedDB
 | Módulo | Descripción |
 |--------|-------------|
 | **Dashboard** | KPIs del mes: ventas, utilidad, stock crítico, pedidos pendientes |
-| **Inventario** | Productos por tipo (sellado / tester / decant\_source), lotes con CPP ponderado (FIFO), alertas de stock mínimo, fotos de producto, apertura de botella para decants |
+| **Inventario** | Productos por tipo y categoría (fragancia / reloj / general), lotes con CPP ponderado (FIFO), alertas de stock mínimo, fotos de producto, apertura de botella para decants |
 | **Decants** | Producción de frascos, control de ML, historial trazable por origen, compra de insumos con débito de cuenta |
-| **Ventas** | Registro de ventas directas de sellados, decants, parciales e insumos con desglose de ganancia por ítem |
-| **Logística** | Pipeline de pedidos locales con validación de stock, señas/pagos anticipados, comisiones tarjeta/QR, entrega con cobro de saldo o vuelto digital, gasto de envío contabilizado, insumos como línea cobrable |
-| **Contabilidad** | Movimientos contables con filtros por mes, tipo y cuenta; eliminación de transferencias con reversión doble |
-| **Cuentas** | Saldos en tiempo real, historial por cuenta, edición de transferencias y recálculo desde movimientos |
-| **Proveedores** | Órdenes de compra internacionales con recepción, distribución de flete y edición en cascada |
-| **Presupuestos** | Presupuestos PDF por cliente con análisis de rentabilidad interno y conversión a pedido; aplica descuentos por ítem y descuento global |
-| **Clientes** | Directorio de clientes con historial de compras y generación de etiquetas de envío |
+| **Ventas** | Registro de ventas directas de sellados, decants, parciales e insumos con desglose de ganancia por ítem; selector de producto con búsqueda y miniaturas |
+| **Logística** | Pipeline de pedidos locales con validación de stock, señas navegables a contabilidad, comisiones, entrega y reversión |
+| **Contabilidad** | Movimientos con filtros por mes/tipo/cuenta; scroll automático al navegar desde señas |
+| **Cuentas** | Saldos en tiempo real, historial por cuenta, edición de transferencias |
+| **Proveedores** | Órdenes de compra con recepción, distribución de flete; formulario de pedido con selector inteligente por categoría |
+| **Presupuestos** | Presupuestos PDF por cliente con análisis de rentabilidad interno y conversión a pedido |
+| **Clientes** | Directorio con historial de compras y etiquetas de envío |
 | **Utilidades** | Análisis de rentabilidad histórica y distribución de ganancias |
-| **Catálogo** | Vista de productos con fichas individuales, exportación HTML interactiva, portal de pedidos con carrito, publicación en GitHub Pages, compatible iOS/WhatsApp/Quick Look |
-| **Comparador** | Solicitudes de cotización a múltiples proveedores, tabla comparativa (mejor total y mix óptimo por ítem), análisis de margen por línea y conversión directa a orden de compra |
-| **Configuración** | Parámetros del negocio, tipo de cambio USD/PYG, logo, PIN de acceso, color de acento |
+| **Catálogo** | Vista interna + exportación HTML interactiva con carrito, publicación en GitHub Pages |
+| **Comparador** | Solicitudes de cotización a múltiples proveedores, tabla comparativa, conversión a orden de compra |
+| **Configuración** | Parámetros del negocio, tipo de cambio, logo, PIN, color de acento |
 
 ---
 
-## Novedades — Fase 2
+## Novedades — v2.5 (Septiembre 2026)
 
-### Identidad visual y seguridad (BRAND)
+### Sistema de categorías de producto
 
-#### PIN de acceso (BRAND-03)
-- Pantalla de bloqueo con keypad numérico, logo del negocio y nombre de la empresa
-- PIN configurable de 4 a 6 dígitos desde Configuración → "Protección con PIN"
-- El PIN se almacena en IndexedDB; la sesión se mantiene activa durante el mismo contexto de navegador mediante `sessionStorage`
-- Al eliminar el PIN, la app queda sin bloqueo
+El sistema ahora soporta múltiples tipos de producto más allá de las fragancias. El campo `category` en cada producto determina el comportamiento en toda la app:
 
-#### Logo y nombre en sidebar (BRAND-04)
-- El sidebar muestra el logo configurado (redondeado, `rounded-xl`) junto al nombre del negocio
-- Si no hay logo, muestra la inicial del nombre sobre fondo violeta
-- Ambos son reactivos: cambian en tiempo real al guardar en Configuración sin recargar la página
+| Categoría | `sizeML` | Campos fragancia | Label de venta |
+|-----------|----------|-----------------|----------------|
+| `fragrance` (default) | ✅ Requerido | Concentración + familia olfativa | "sellado" |
+| `watch` | ❌ No aplica | Ocultos | "unidad" |
+| `general` | ❌ No aplica | Ocultos | "unidad" |
 
-### Inventario — Modo ML directo para decants
+- **Retrocompatibilidad total**: `category === undefined` se trata como `'fragrance'` en toda la app. Sin migración de base de datos.
+- **Marcador de código**: todos los puntos provisionales están marcados con `// TODO(PROVISIONAL-CATEGORY)` para su migración a BD relacional en Fase 6.
+- **`effSizeML = sizeML ?? 1`**: patrón estándar en cálculos de costo-por-ML para evitar NaN/Infinity en productos sin tamaño.
 
-- **Compra de decants pre-preparados**: toggle "Ingresar ML directamente" en el formulario de stock para `decant_source`. Permite registrar ML comprados ya fraccionados (sin botella completa), con costo directo en PYG local sin conversión USD/cotización
-- En modo normal: `qty = botellas × sizeML`, costo en USD con cotización. En modo ML: `qty = ML directos`, `batchCostPYG` ingresado directamente
+**Módulos actualizados:**
+- **Inventario**: selector de categoría en form; campos de fragancia condicionales; filtro por categoría; propagación de `category` al crear `decant_source`
+- **Catálogo**: muestra `'Reloj'` en lugar de concentración/ml para watches (vista interna y HTML exportado)
+- **Ventas**: división segura `sizeML ?? 1`; label adaptativo `'unidad'` / `'sellado'`
+- **Presupuestos**: división segura `sizeML ?? 1` en líneas decant/parcial
+- **Proveedores**: `sizeML` opcional; campo ml oculto en formulario según categoría
 
-### Catálogo mejorado (CATX)
+### Componente ProductAutocomplete
 
-#### Ficha individual de producto (CATX-06)
-- Clic en cualquier tarjeta del catálogo abre un modal con imagen ampliada, badges de tipo y familia olfativa, nombre, marca, concentración/tamaño, notas olfativas y precios
-- Para decants: muestra todos los tamaños con precio configurado (3ml, 5ml, 10ml, 30ml) independientemente de si existe un lote físico preparado
+Nuevo componente reutilizable `src/components/ui/ProductAutocomplete.tsx` que reemplaza todos los selects nativos de producto en la app:
 
-#### Portal de pedidos con carrito (CATX-07 / CATX-08 / CATX-09)
-- Genera un único archivo `.html` con todas las imágenes embebidas en base64 — no requiere internet para visualizarse
-- **Modales via CSS `:target`**: cada tarjeta es un `<a href="#p-{id}">` nativo; el modal es un `<div id="p-{id}">` activado por CSS `.mow:target { display: flex }`. Funciona sin JavaScript, incluyendo iOS Quick Look
-- **Carrito de compras**: selector de tamaño y cantidad por producto, carrito acumulativo con barra flotante, modal de resumen con ajuste de cantidades y total en PYG
-- **Envío por WhatsApp**: el pedido completo se formatea como mensaje y se envía al número de WhatsApp del negocio configurado
-- Búsqueda: `oninput` + `onkeyup` + `onsearch` + `onchange` — compatible con iOS (botón × nativo de `<input type="search">`)
-- Descarga via `<a download>` para evitar bloqueo de popups en funciones async
-- Diseño responsive: grilla de 2 columnas en móvil, auto-fill en desktop
+- **`MiniThumb`**: carga la imagen del producto desde IndexedDB (`imageIds[0]`), crea `ObjectURL` con limpieza automática al desmontar
+- **Dropdown**: miniatura 32×32 · nombre · marca/tamaño · badge de stock (verde / gris)
+- **Búsqueda**: filtra por nombre y marca en tiempo real, hasta 60 resultados
+- **UX**: botón × para limpiar, `onBlur` con 150ms para permitir clicks, reset de search via `useEffect` cuando el valor se resetea externamente
+- **Usado en**: Ventas, Presupuestos, Logística, Proveedores
 
-#### Compatibilidad iOS / WhatsApp (CATX-07 fixes)
-- `viewport-fit=cover` + `env(safe-area-inset-bottom)` — contenido no tapado por barras del sistema en iPhone (Quick Look, Safari)
-- Navegación por hash: `<a href="#cart">` nativo en barra de carrito; scroll top via `.click()` en anclas existentes — resuelve el bug de `location.hash =` ignorado en WKWebView
-- Botones de agregar: clase CSS `.unready` en lugar del atributo `disabled` — resuelve el bug donde `removeAttribute("disabled")` no funciona confiablemente en WKWebView
-- `setSz` recibe `btn` (this) explícitamente — resuelve `event.currentTarget` global no disponible en handlers inline de WKWebView
-- **Banner de detección WKWebView**: detecta automáticamente cuando el HTML se abre en el navegador in-app de WhatsApp, Instagram u otras apps en iPhone, y muestra un aviso: "Para hacer pedidos, abrí en Safari"
+### Rediseño del formulario "Nuevo pedido" en Proveedores
 
-#### Publicación en GitHub Pages (CATX-10)
-- **Configuración** (una sola vez): nueva Card en Configuración con instrucciones de setup, inputs para usuario GitHub / repositorio / Personal Access Token, preview de URL resultante
-- **Botón "Publicar en línea"**: desde el módulo Catálogo, sube `catalogo.html` al repositorio via GitHub Contents API (`PUT /repos/{owner}/{repo}/contents/catalogo.html`). Obtiene SHA del archivo existente para actualizaciones; crea la rama `main` automáticamente en el primer push
-- Encoding UTF-8 → base64 seguro: `TextEncoder` → bucle `String.fromCharCode` → `btoa()` (evita truncamiento de caracteres multi-byte con `btoa()` directo)
-- Banner de resultado con URL copiable y botón de compartir por WhatsApp; banner de error con mensaje de la API
+Cada línea de producto ahora tiene un layout en tarjeta con 4 filas:
 
-### Comparador de proveedores — SOURCE (Fase 5)
+1. **`ProductAutocomplete`** — busca en el inventario con miniatura; al seleccionar auto-rellena nombre, marca, ml, tipo y category
+2. **Marca + Nombre manual** — visibles solo cuando no hay producto del inventario seleccionado (`productId === '0'`)
+3. **ml + cantidad + precio** — ml oculto para relojes/general; grid 2 o 3 columnas según corresponda
+4. **Chips de tipo** — Sellado / Tester / Para decants
 
-#### Modelo de datos (DB schema v6)
-- Tres tablas nuevas: `sourcingRequests`, `sourcingLines`, `supplierQuotes`
-- `SourcingRequest`: cabecera de solicitud con estado (`draft → quoting → decided → ordered → closed`)
-- `SourcingLine`: cada producto/item a cotizar, con destino `stock` o `client`, cliente y precio de venta esperado opcionales
-- `SupplierQuote`: oferta de un proveedor con flete en Guaraníes (`estimatedShippingPYG`), cotización USD/PYG y precios por línea
+### Fix: imágenes PNG/AVIF con fondo negro
 
-#### Flujo completo
-1. **Solicitud**: crear cabecera y cargar líneas (producto existente o texto libre, cantidad, destino)
-2. **Cotizaciones**: agregar oferta por proveedor con precio USD por ítem, flete estimado en Gs. y cotización; edición en cualquier momento mientras el estado sea `quoting`
-3. **Comparativa**: tabla cruzada con costo puesto (subtotal USD × cotización + flete proporcional); escenario A (menor total con un solo proveedor) y escenario B (mix óptimo eligiendo el mejor precio ítem a ítem); alerta de margen para líneas con destino `client`
-4. **Conversión a orden**: genera un `Order` en Proveedores con los ítems cotizados; pre-crea en Inventario los productos nuevos con `stockSealed: 0`; las líneas sin cotización son filtradas automáticamente
-
-#### Fórmula de costo
-```
-fleteProporcional = estimatedShippingPYG × (subtotalLineaUSD / totalSubtotalUSD)
-costoPYGLinea = subtotalLineaUSD × exchangeRate + fleteProporcional
-```
+`compressImage()` en `src/lib/images.ts` ahora rellena el canvas con blanco (`fillRect`) antes de dibujar la imagen. Esto evita que los píxeles transparentes de PNG/AVIF se conviertan a negro al exportar como JPEG (que no soporta canal alfa).
 
 ---
 
-## Novedades — adiciones v2.2
+## Novedades — v2.4 (Agosto 2026)
 
-### Catálogo — Mensaje WhatsApp profesional
+### Logística — Señas navegables y trazabilidad
 
-- El botón "Enviar por WhatsApp" del catálogo HTML exportado ahora genera un mensaje en formato ecommerce estándar:
-  - Encabezado con el nombre del negocio (`*Pedido — JODA Parfums*`)
-  - Una línea por ítem: bullet `•`, marca, nombre, tamaño o "Sellado", cantidad y subtotal en Gs.
-  - Total final en negrita
-  - Cierre cordial pidiendo confirmación de disponibilidad y datos de entrega
-- Se agregó la variable `BN` (business name) al HTML generado para incluir el nombre del negocio en el mensaje; `BP` ya existía para el número de WhatsApp
+- Las señas en el card de pedido y en el modal de detalle son clickeables: navegan a `/contabilidad` resaltando el movimiento correspondiente con scroll automático + highlight violeta
+- `AdvancePayment.movementId` guarda el ID del movimiento contable para la navegación
+- Badge `⚠ Sin registro` en señas sin movimiento asociado (migración de datos legados)
+- Fix 'Anular entrega': ya no revierte señas incorrectamente
 
-### Cuentas — Fechas y edición de transferencias
+### Catálogo — Rediseño completo
 
-- **Fecha al crear**: al registrar una transferencia entre cuentas, ahora se puede establecer la fecha manualmente (campo de fecha con valor por defecto = hoy); si se deja en blanco usa la fecha actual
-- **Edición de transferencias**: botón editar (lápiz) en cada fila de transferencia del historial; permite corregir la fecha y la descripción de una transferencia ya registrada sin afectar los saldos
+**Vista interna (ERP):**
+- Header custom, pills de tipo + familia olfativa con scroll horizontal
+- Toggle `SlidersHorizontal` para rango de precio
+- Cards portrait 3/4, badge sobre imagen, "desde Gs. X" para decants
 
-### Decants — Compra de insumos y gestión de tipos
+**Catálogo exportado (HTML público):**
+- Fondo arena `#f4f2ee`, cards blancas con radio 14px + sombra doble sutil
+- Grid `minmax(210px,1fr)` gap 18px, badge dark frosted-glass sobre imagen
+- "desde Gs. X" en card, detalle de tamaños en modal; botones negros, header sticky blanco
 
-- **Registrar compra**: botón "Registrar compra" en la cabecera de Decants abre un modal con todos los insumos disponibles; por cada insumo se puede ingresar cantidad comprada y costo unitario (pre-llenado con el costo actual); al confirmar:
-  - Se incrementa el stock de cada insumo con cantidad > 0
-  - Se actualiza el costo unitario si fue modificado
-  - Se genera un movimiento contable `expense/supplies` en la cuenta elegida
-  - Se descuenta el total de la cuenta seleccionada
-  - Se registra fecha y descripción del gasto
-- **sizeML oculto para packaging**: al gestionar insumos, el campo "Tamaño (ml)" solo aparece para tipos de frasco (`3ml / 5ml / 10ml / 30ml`); para tipos como `packaging`, `gift_wrap`, `cap`, `label` y `other` el campo está oculto por no tener sentido semántico
+**Toggle de visibilidad por producto:**
+- Verde (`catalogVisible=true`): forzar visible aunque sin stock
+- Rojo (`catalogVisible=false`): ocultar siempre
+- Naranja (`undefined`): sigue regla de stock
 
-### Inventario — Integridad de datos en apertura de botella
+### Decants — Historial con filtros y paginación
 
-Corrección de integridad de datos: anteriormente abrir una botella sellada agregaba `stockOpenML` al propio producto sellado, mezclando unidades y ML en una misma entidad.
+- Búsqueda por perfume/marca, pills por tamaño (3/5/10/30ml), picker de mes
+- Paginación 15/página con ellipsis inteligente
+- Componente `Pagination` reutilizable (`src/components/ui/Pagination.tsx`)
 
-**Nuevo flujo al "Abrir para decants":**
-1. Descuenta 1 unidad de `stockSealed` en el producto sellado/tester (FIFO sobre lotes)
-2. Busca si ya existe un producto `decant_source` con el mismo nombre y marca
-   - **Si existe**: suma los ML y recalcula el CPP ponderado (`(mlExistentes × costoPrevio + costoPorML × mlNuevos) / (mlExistentes + mlNuevos)`)
-   - **Si no existe**: crea un nuevo producto `decant_source` con `stockOpenML = sizeML` y CPP por ML
-3. En ambos casos crea un `StockEntry` de tipo `decant_source` con el lote, fecha y costo por ML para trazabilidad completa
-- El modal de confirmación ahora muestra: producto destino (nuevo o existente), ML antes/después, CPP antes/después
+---
 
-**Botón de migración de datos legados**: los productos sellados que aún conservaban `stockOpenML > 0` (flujo anterior incorrecto) muestran un botón naranja `+Xml ↗` con tooltip. Al hacer clic, migra esos ML al producto `decant_source` correspondiente (creándolo si no existe) y limpia `stockOpenML = 0` en el sellado.
+## Novedades — v2.3 (Julio/Agosto 2026)
 
-### Logística — Insumos como línea cobrable en pedidos
+- **Catálogo**: mensaje WhatsApp ecommerce profesional (bullet por ítem + nombre negocio + total)
+- **Cuentas**: fecha editable en transferencias + edición de transferencias históricas
+- **Decants**: modal de compra de insumos con débito de cuenta seleccionable
+- **Inventario**: apertura de botella → `decant_source` separado con CPP ponderado + lote de trazabilidad + botón de migración legacy
+- **Logística**: ítem tipo 'Insumo' con `supplyId`; `totalCost` incluye insumos; fix `validItems` supply
+- **Ventas**: fila 'Insumos y envío' en detalle de venta
+- **Proveedores**: fix eliminar prepago revierte movimiento; fecha editable en pago anticipado; fix `sizeML` en recepción decants
 
-- En el formulario de pedido (crear y editar), el selector de tipo de ítem ahora incluye la opción **"Insumo"**
-- Al elegir "Insumo", aparece un selector con todos los insumos disponibles (nombre + stock actual en tiempo real) en lugar del selector de productos
-- El precio unitario se pre-llena automáticamente con el costo del insumo seleccionado (editable)
-- Al guardar, el ítem queda asociado con `supplyId` para identificarlo como insumo cobrado al cliente
-- Caso de uso: bolsas de regalo, moños y packaging cobrados explícitamente en el pedido, manteniendo el margen real de la venta
+---
 
-### Fixes de esta fase
+## Novedades — v2.2
 
-| Módulo | Fix |
-|--------|-----|
-| **Logística** | Anular entrega revierte correctamente todos los movimientos de la entrega (cobro + comisión + envío), preservando las señas ya registradas |
-| **Logística** | Gasto de envío pagado por la empresa se registra como `expense/shipping` al confirmar la entrega; selector de cuenta disponible incluso cuando el saldo fue cubierto íntegramente por señas |
-| **Logística** | `totalCost` del pedido incluye el gasto de envío cuando lo absorbe el negocio |
-| **Contabilidad** | Eliminar una transferencia ahora revierte ambos saldos (débito en origen, crédito en destino) |
-| **Contabilidad** | Botón eliminar disponible para todos los tipos de movimiento, incluyendo transferencias |
-| **Presupuestos** | Al convertir a pedido, el precio de cada ítem aplica el descuento individual del ítem multiplicado por el descuento global del presupuesto |
-| **Ventas** | Agregar al carrito el mismo producto con diferente precio crea una línea separada en lugar de fusionar cantidades |
-| **Catálogo** | Precios de decants tomados de `product.price3ML/5ML/10ML/30ML` — no depende de que existan lotes físicos preparados para mostrar el precio |
-| **Proveedores** | Eliminar un pedido recibido ahora revierte **todos** los movimientos de pago asociados (prepago + envío); antes solo revertía el primero por uso de `.first()` en lugar de `.toArray()` + loop |
-| **Inventario** | Al cambiar el tipo de producto entre sellado/tester ↔ decant\_source, el CPP se convierte automáticamente (÷ sizeML o × sizeML) para mantener la coherencia por-ml vs por-botella |
-| **Inventario** | Los lotes de un producto sellado cuya botella fue abierta para decants muestran "→ X ml abiertos" en lugar de "agotado", eliminando la inconsistencia visual |
-| **Proveedores** | Edición de pedidos pendientes/confirmados/en-camino antes de recibir: fecha, llegada estimada, cotización, nombre/marca/ml/cantidad/precio por ítem, notas |
-| **Proveedores** | Tipo de producto por ítem al crear pedido (Sellado / Tester / Para decants); chips de selección compactos con Sellado como default; autocomplete pre-llena el tipo del producto existente |
-| **Proveedores** | Al pre-crear y recepcionar, el tipo del ítem determina el stock y CPP correctos; productos de mismo nombre pero distinto tipo coexisten como entidades separadas |
-
-### Fixes y mejoras adicionales (post v2.2)
-
-| Módulo | Cambio |
-|--------|--------|
-| **Logística** | Items tipo 'Insumo' ahora guardan correctamente: el filtro `validItems` excluía ítems con `productId = '0'` aunque tuvieran `supplyId` válido |
-| **Logística** | `totalCost` en entrega ahora incluye el costo de `order.supplies` (insumos utilizados); antes el margen en Ventas quedaba inflado |
-| **Ventas** | Vista de detalle de venta muestra fila 'Insumos y envío' con el monto descontado cuando hay costos adicionales no reflejados en los ítems individuales; también muestra fila de comisión tarjeta/QR si aplica |
-| **Ventas** | Etiqueta de tipo en detalle de venta corregida para mostrar 'Tester' e 'Insumo' además de Sellado/Decant/Parcial |
-| **Decants** | Historial de producción mostraba '—' para perfumes cuyo stock llegó a 0: `allProducts` ahora carga todos los productos sin filtro; `openProducts` (con ML disponibles) se usa solo en las cards de calculadora y el selector de producción |
-| **Decants** | Calculadora de costos rediseñada: reemplaza grilla de cards grandes (una por producto, ~150px c/u) por tabla compacta de una fila por producto — reduce drásticamente el scroll |
-| **Proveedores** | Eliminar un pedido no recibido (pendiente/en camino) con prepago ahora revierte el movimiento contable y repone el saldo en la cuenta; antes solo eliminaba el registro del pedido |
-| **Proveedores** | Modal 'Registrar pago anticipado' incluye campo de fecha editable (default: hoy) |
-| **Proveedores** | Recepción de ítems `decant_source`: usa `item.sizeML` del pedido en lugar del `sizeML` del producto existente — permite comprar viales de 3ml de un perfume definido como 100ml sin registrar 100ml por error |
+- Edición de pedidos a proveedor antes de recepcionar (fecha, ítems, cotización, notas)
+- Tipo de producto por ítem al crear pedido: Sellado / Tester / Para decants
+- Pre-creación y recepción respetan el tipo; productos mismo nombre/distinto tipo = entidades separadas
+- Pago anticipado al crear pedido
 
 ---
 
@@ -228,13 +178,69 @@ src/
 │   └── types.ts       # Interfaces TypeScript para todas las entidades
 ├── lib/
 │   ├── format.ts      # Helpers: fmtPYG, fmtDate, today, nowISO
-│   ├── images.ts      # compressImage, blobToBase64, base64ToBlob, createObjectURL
+│   ├── images.ts      # compressImage (con relleno blanco para PNG/AVIF), blobToBase64
 │   └── customers.ts   # upsertCustomer
 ├── components/
 │   ├── layout/        # Sidebar, Layout, LockScreen
-│   └── ui/            # Button, Card, Modal, Input, Select, Badge, PageHeader...
+│   └── ui/
+│       ├── Button, Card, Modal, Input, Select, Badge, PageHeader
+│       ├── CustomerAutocomplete   # Selector de cliente con búsqueda
+│       ├── ProductAutocomplete    # Selector de producto con miniatura (MiniThumb)
+│       └── Pagination             # Paginación reutilizable con ellipsis
 └── pages/             # Un archivo por módulo de negocio
 ```
+
+---
+
+## Tipos de producto
+
+| Tipo (`type`) | Categoría (`category`) | Stock | CPM |
+|---------------|----------------------|-------|-----|
+| `sealed` | `fragrance` / `watch` / `general` | `stockSealed` (unidades) | — |
+| `tester` | `fragrance` | `stockSealed` (unidades) | — |
+| `decant_source` | `fragrance` | `stockOpenML` (ml) | `costPYG` directo |
+| sellado/tester abierto | `fragrance` | `stockOpenML` (ml) | `costPYG / (sizeML ?? 1)` |
+
+---
+
+## Reglas de negocio clave
+
+### CPM (costo por mililitro)
+```
+product.type === 'decant_source'  →  costPYG
+cualquier otro abierto            →  costPYG / (sizeML ?? 1)
+```
+
+### Costo de un decant
+```
+costoDecant = CPM × sizeML + supply.costPYG (frasco)
+```
+
+### FIFO en lotes
+Al preparar un pedido o vender, `quantityRemaining` de cada `StockEntry` se decrementa desde el lote más antiguo hasta cubrir la cantidad requerida.
+
+### Señas / pagos anticipados en pedidos
+Cada pago anticipado genera un `Movement` de ingreso inmediato y guarda `movementId` para navegación a Contabilidad. Al entregar, se cobra solo el saldo restante.
+
+### Comisiones tarjeta / QR
+Al cobrar con `card` o `qr` se aplica **3% + IVA 10% = 3,3%**. Se generan dos movimientos: ingreso bruto y gasto de comisión. La comisión se descuenta de `totalProfit`.
+
+### Vuelto digital en efectivo
+`cashReceived − saldo` = vuelto. Genera: ingreso del efectivo bruto + gasto del vuelto desde la cuenta digital elegida.
+
+### Gasto de envío
+Si `shippingPaidBy === 'business'` y `shippingCost > 0`, se registra `expense/shipping` al confirmar entrega e impacta en `totalCost`.
+
+### Pre-creación de productos al hacer pedido
+Los productos inexistentes se crean con `stockSealed/stockOpenML: 0` al guardar el pedido, permitiendo armar pedidos de logística antes de recepcionar.
+
+### Trazabilidad Presupuesto ↔ Pedido
+- `Budget.localOrderId` — ID del `LocalOrder` creado desde el presupuesto
+- `LocalOrder.budgetId` — ID del `Budget` de origen
+- Si el pedido se elimina, `localOrderId` se limpia y el botón 'Crear pedido' reaparece
+
+### Categoría retrocompatible
+`category === undefined` se trata como `'fragrance'` en todos los módulos. Los productos existentes no requieren migración.
 
 ---
 
@@ -247,139 +253,17 @@ src/
 
 [Opción B] Presupuesto → Pedido
    Presupuesto (borrador → enviado → aceptado)
-        ↓  [botón "Crear pedido"]
+        ↓  [botón 'Crear pedido']
    Logística — Pendiente
         ↓  [valida stock + insumos]
    Logística — En preparación  ← descuenta ML/stock, crea DecantBatch, descuenta frascos
         ↓
    Logística — Listo
         ↓  [registra cobro / confirma si todo fue señado]
-   Logística — Entregado       ← crea Sale + SaleItem + movimiento contable + gasto de envío si aplica
+   Logística — Entregado       ← crea Sale + SaleItem + movimiento contable + gasto de envío
         ↓
    Aparece en Ventas, Contabilidad y Utilidades
 ```
-
----
-
-## Tipos de producto
-
-| Tipo | Descripción | Stock | CPM |
-|------|-------------|-------|-----|
-| `sealed` | Botella sellada para venta | `stockSealed` (unidades) | — |
-| `tester` | Tester para venta (precio diferente) | `stockSealed` (unidades) | — |
-| `decant_source` | Botella abierta, fuente de decants | `stockOpenML` (ml) | `costPYG` |
-| cualquier otro abierto | Sellado/tester abierto para decants | `stockOpenML` (ml) | `costPYG / sizeML` |
-
----
-
-## Reglas de negocio clave
-
-### CPM (costo por mililitro)
-```
-product.type === 'decant_source'  →  costPYG
-cualquier otro abierto            →  costPYG / sizeML
-```
-
-### Costo de un decant
-```
-costoDecant = CPM × sizeML + supply.costPYG (frasco)
-```
-
-### FIFO en lotes
-Al preparar un pedido o vender, `quantityRemaining` de cada `StockEntry` se decrementa desde el lote más antiguo hasta cubrir la cantidad requerida.
-
-### Cascade de costos al editar lotes
-Editar el costo de un lote calcula `costDelta = nuevoTotal - anteriorTotal` y lo propaga al `Movement` contable vinculado y al saldo de la `Account` correspondiente.
-
-### Señas / pagos anticipados en pedidos
-Cada pago anticipado genera un `Movement` de ingreso inmediato. Al entregar, se cobra solo `max(0, totalAmount - señaTotal)`. Si el saldo es 0, la entrega se confirma sin requerir cuenta de cobro (pero se puede asignar cuenta para registrar gasto de envío si aplica).
-
-### Comisiones tarjeta / QR
-Al cobrar una seña o el saldo de entrega con método `card` o `qr`, se aplica **3% + IVA 10% = 3,3%** sobre el monto cobrado. Se generan dos movimientos: ingreso bruto en la cuenta elegida y gasto de comisión (`category: 'services'`) en la misma cuenta. La comisión se descuenta de la utilidad final del pedido (`totalProfit`).
-
-### Vuelto digital en cobro en efectivo
-Al entregar con método `cash`, se puede activar "Recibí efectivo y transferí el vuelto". Se ingresa el efectivo recibido, el vuelto se calcula automáticamente (`cashReceived − saldo`) y se elige una cuenta de origen (billetera digital). Genera: ingreso del efectivo bruto en la cuenta de cobro y gasto del vuelto en la cuenta seleccionada.
-
-### Gasto de envío en pedidos
-Si `order.shippingPaidBy === 'business'` y `shippingCost > 0`, al confirmar la entrega se registra un `Movement` de tipo `expense/shipping` en la cuenta elegida. Este gasto se incluye en `totalCost` del pedido para el cálculo de rentabilidad.
-
-### Pre-creación de productos al hacer pedido a proveedor
-Al crear un pedido a proveedor, los productos que aún no existen en inventario se crean automáticamente con `stockSealed: 0`. Esto permite armar pedidos de Logística con esos productos antes de recepcionar el pedido. El stock real se agrega al recepcionar normalmente.
-
-### Insumos en pedidos con decants
-Al pasar un pedido a "Preparar", el sistema descuenta automáticamente el frasco correspondiente por cada ítem de tipo `decant` (búsqueda por `sizeML`). Por eso el array `supplies[]` del `LocalOrder` es para insumos adicionales (etiquetas, packaging, etc.) y **no** debe incluir los frascos de decant para evitar doble descuento.
-
-### Trazabilidad Presupuesto ↔ Pedido
-- `Budget.localOrderId` — ID del `LocalOrder` creado desde este presupuesto
-- `LocalOrder.budgetId` — ID del `Budget` de origen
-- Si el pedido se elimina desde Logística, `localOrderId` se limpia en el presupuesto y el botón "Crear pedido" vuelve a aparecer
-
-### Precios de decants en catálogo
-Los precios visibles en el catálogo (app y HTML exportado) se toman de `product.price3ML`, `product.price5ML`, `product.price10ML`, `product.price30ML`. No dependen de que existan lotes físicos (`DecantBatch`) preparados para esos tamaños.
-
----
-
-## Módulos en detalle
-
-### Inventario
-- **Tipos de producto**: sellado, tester (se vende como sellado a precio diferente) y decant\_source
-- **Abrir para decants**: descuenta 1 unidad sellada/tester por FIFO y crea o actualiza un producto `decant_source` separado con CPP ponderado y lote de trazabilidad; nunca mezcla ML en la entidad sellada
-- **Migración de datos legados**: productos sellados con `stockOpenML > 0` (flujo anterior) muestran un botón naranja para migrar esos ML al `decant_source` correspondiente
-- **Lotes (StockEntry)**: costo USD + cotización → costo PYG; CPP recalculado al agregar lotes; lotes `decant_source` registran ML con costo por-ML
-- **Edición de lotes en cascada**: cambiar precio propaga el delta al movimiento contable y al saldo de la cuenta
-- **Fotos de producto**: hasta N fotos por producto con compresión automática (800px), thumbnails con hover-delete
-- **Visible en catálogo**: toggle por producto para controlar qué aparece en el catálogo público
-- **Ingreso rápido con trazabilidad**: al agregar stock con proveedor seleccionado, se crea un `Order` con `status: 'received'` que aparece en el historial del proveedor
-
-### Proveedores
-- Recepción de pedidos: genera `StockEntry` por producto, distribuye el flete proporcionalmente, recalcula CPP
-- **Edición de pedidos recibidos**: modal con cambio de cotización, flete y precios por ítem; cascade completo a stock entries, CPP de productos, movimiento y saldo
-- **Edición de pedidos pendientes/en tránsito**: modal antes de recepcionar con campos de fecha, llegada estimada, cotización, nombre/marca/ml/cantidad/precio por ítem y notas; sin cascade (no hay stock ni movimientos aún)
-- **Tipo de producto por ítem**: al crear un pedido, cada línea tiene selector compacto Sellado / Tester / Para decants (default: Sellado); el autocomplete pre-llena el tipo del producto si ya existe; el tipo se guarda en `OrderItem.type` y se propaga a la pre-creación y a la recepción
-- **Búsqueda por nombre+marca+tipo**: al pre-crear y recepcionar, un producto con mismo nombre/marca pero distinto tipo crea una entidad separada — evita que un pedido "sellado" del mismo perfume vaya al stock ML del `decant_source`
-- **Pago anticipado**: al crear un pedido o desde la tabla de pedidos activos, se puede registrar el pago del total de productos antes de recepcionar. Al recepcionar un pedido prepagado, solo se descuenta el envío
-- **Pre-creación de productos**: al crear un pedido, los productos nuevos se crean en inventario con `stockSealed: 0` (o `stockOpenML: 0` si son decants) para poder usarlos en Logística antes de recepcionar
-
-### Presupuestos
-- **Tipos de línea**: Sellado, Tester, Decant (tamaños 3/5/10/30ml), Parcial, Personalizado
-- **Auto-llenado**: seleccionar producto + tipo completa descripción y precio sugerido
-- **Análisis de rentabilidad interno** (no aparece en PDF):
-  - Costo estimado por línea según tipo
-  - Ganancia unitaria y margen % con colores de alerta
-  - Totales: costo, ingreso neto con descuento, ganancia estimada, margen general
-- **Export PDF**: diseño con header oscuro/dorado, tabla de ítems, subtotal con descuento, total
-- **Conversión a pedido**: presupuesto aceptado → un click → `LocalOrder` en Logística con ítems y estado Pendiente; el precio aplica descuento por ítem × descuento global; frascos para decants se descontarán al preparar (no se pre-cargan en `supplies[]`)
-
-### Logística
-- Validación de stock antes de preparar: unidades selladas, ML abiertos, frascos e insumos
-- Al preparar: descuenta stock del producto + FIFO sobre lotes + frascos por ítem decant + insumos de venta + crea `DecantBatch`
-- **Pagos anticipados** (señas) con movimiento contable inmediato; saldo calculado al entregar; admiten método tarjeta/QR con comisión automática
-- **Entrega**: fecha editable, métodos efectivo/transferencia/tarjeta/QR/otro; comisión automática en tarjeta y QR; vuelto digital opcional en efectivo; gasto de envío registrado si lo paga el negocio
-- **Reversión a Pendiente**: restaura ML/stock, elimina DecantBatch, repone frascos e insumos
-- **Anular entrega**: revierte cobros de la entrega (principal + comisión + envío) preservando señas ya registradas; devuelve el pedido a estado Listo
-- **Eliminar venta de logística**: revierte cobro, restaura stock (FIFO + frascos + ML + insumos), elimina `DecantBatch` y el pedido asociado
-
-### Catálogo
-- **Vista interna**: grid responsive de productos con foto, badge de tipo y familia olfativa, precios por tamaño
-- **Ficha de producto (CATX-06)**: modal al clic con imagen ampliada, todos los datos del producto y precios por tamaño configurados
-- **Portal de pedidos HTML (CATX-07/08/09)**: archivo autocontenido con imágenes en base64, modales CSS `:target`, carrito multi-producto, envío por WhatsApp; búsqueda + filtros responsive; compatible iOS Quick Look / WKWebView / Android
-- **Banner WKWebView**: detecta apertura en navegador in-app de WhatsApp en iOS y guía al usuario a abrirlo en Safari
-- **Publicación en GitHub Pages (CATX-10)**: sube el HTML generado al repositorio configurado via API; URL pública permanente compartible por WhatsApp
-- **Export PDF**: tabla con productos filtrados, branding oscuro/dorado, logo del negocio
-
-### Cuentas
-- Historial por cuenta: filtro de mes, resumen ingresos/egresos/saldo del período, tabla de movimientos
-- **Fecha en transferencias**: campo de fecha editable al crear una transferencia (default: hoy)
-- **Edición de transferencias**: botón lápiz en cada fila de transferencia permite corregir fecha y descripción sin afectar saldos
-- **Recalcular desde movimientos**: herramienta de corrección que suma todos los movimientos de la cuenta para corregir inconsistencias históricas
-
-### Utilidades
-- **6 KPIs**: utilidad acumulada, utilidad del mes, distribuido, sin distribuir, margen promedio, ticket promedio
-- **Evolución mensual**: tabla con mini-barras de ingresos/costos/ganancia por mes (últimos 12); margen coloreado (verde ≥40%, naranja 20–39%, rojo <20%)
-- **Detalle de ventas**: sección colapsable, filtro por mes en chips, tabla individual por venta con margen %
-- **Distribución**: calculadora con porcentajes configurables; registra distribución por período. Si hay deuda personal activa, muestra desglose: porción bruta → deuda cubierta → neto disponible (informativo)
-- **Historial de distribuciones clickeable**: modal con ventas del período, desglose de los 3 destinos y métricas
-- **Balance personal**: panel con total retirado, devuelto y saldo pendiente; historial entrelazado; botones "Retirar" y "Devolver"
 
 ---
 
@@ -389,23 +273,29 @@ Los precios visibles en el catálogo (app y HTML exportado) se toman de `product
 
 | ID | Feature | Descripción |
 |----|---------|-------------|
-| MAY-08 | sobrePedido → SourcingRequest | Los ítems marcados "sobre pedido" en un presupuesto generan automáticamente una SourcingRequest en el Comparador |
+| MAY-08 | sobrePedido → SourcingRequest | Ítems 'sobre pedido' de presupuesto generan automáticamente una SourcingRequest |
 
 ### Fase 3 — Analytics
 
 | ID | Feature | Descripción |
 |----|---------|-------------|
 | ANA-01 | Dashboard avanzado | Gráficos de evolución, top productos, comparativa mensual |
-| ANA-02 | Reporte de stock | Vista consolidada de stock crítico, rotación y valor en inventario |
+| ANA-02 | Reporte de stock | Stock crítico, rotación y valor en inventario |
 | ANA-03 | Reporte de clientes | Frecuencia de compra, ticket promedio, productos favoritos por cliente |
 
 ### Fase 4 — UX
 
 | ID | Feature | Descripción |
 |----|---------|-------------|
-| UX-01 | Modo oscuro | Toggle claro/oscuro con persistencia en config |
-| UX-02 | Accesos rápidos | Atajos de teclado para acciones frecuentes (nueva venta, nuevo pedido) |
-| UX-03 | Notificaciones internas | Alertas de stock mínimo y pedidos pendientes visibles en el sidebar |
+| UX-01 | Modo oscuro | Toggle claro/oscuro con persistencia |
+| UX-02 | Accesos rápidos | Atajos de teclado para acciones frecuentes |
+| UX-03 | Notificaciones internas | Alertas de stock mínimo en sidebar |
+
+### Fase 6 — Backend y multi-dispositivo
+
+- Migrar catálogo HTML estático a catálogo web real (Supabase o Firebase)
+- Sincronización de datos entre dispositivos
+- Migrar campos de fragancia a tabla relacional `fragrances` (eliminar `TODO(PROVISIONAL-CATEGORY)`)
 
 ---
 
@@ -429,7 +319,7 @@ npm install
 npm run dev
 ```
 
-Abre `http://localhost:5173`. La base de datos se crea automáticamente con datos semilla en la primera ejecución: 3 cuentas por defecto y frascos de 3/5/10/30ml.
+Abre `http://localhost:5173`. La base de datos se crea automáticamente con datos semilla en la primera ejecución.
 
 ### Scripts disponibles
 
@@ -450,7 +340,7 @@ Al ser una SPA estática sin backend, puede desplegarse en cualquier hosting de 
 - **GitHub Pages**: `npm run build` → servir `dist/`
 - **Self-hosted**: servir `dist/` con Nginx o cualquier servidor HTTP
 
-> **Importante:** Cada navegador/dispositivo tiene su propia base de datos local. Los datos no se sincronizan entre dispositivos. Para hacer backup, usar la función de exportación en Configuración → "Exportar datos".
+> **Importante:** Cada navegador/dispositivo tiene su propia base de datos local. Los datos no se sincronizan entre dispositivos. Para backup usar Configuración → "Exportar datos".
 
 ---
 

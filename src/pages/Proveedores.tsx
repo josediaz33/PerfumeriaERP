@@ -2,7 +2,7 @@ import { useState, Fragment } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { Plus, Truck, Globe, DollarSign, Package, ChevronDown, ChevronUp, Trash2, X as XIcon, Edit2 } from 'lucide-react'
 import { db } from '../db/db'
-import type { Order, OrderStatus, ProductType } from '../db/types'
+import type { Order, OrderStatus, ProductType, ProductCategory } from '../db/types'
 // TODO(PROVISIONAL-CATEGORY): importar ProductCategory — provisional hasta Fase 6
 import { fmtPYG, fmtUSD, fmtDate, today, nowISO } from '../lib/format'
 import { PageHeader } from '../components/ui/PageHeader'
@@ -10,6 +10,7 @@ import { Button } from '../components/ui/Button'
 import { Card, CardBody } from '../components/ui/Card'
 import { Modal } from '../components/ui/Modal'
 import { Input, Select, Textarea } from '../components/ui/Input'
+import { ProductAutocomplete } from '../components/ui/ProductAutocomplete'
 import { Badge } from '../components/ui/Badge'
 
 const statusColors: Record<OrderStatus, 'yellow' | 'blue' | 'violet' | 'green' | 'red'> = {
@@ -70,9 +71,8 @@ export function Proveedores() {
     supplierId: '', exchangeRate: '7500', orderDate: today(), estimatedArrival: '', notes: '',
     localCurrency: false,
     registerPayment: false, paymentAccountId: '',
-    items: [{ productName: '', brand: '', sizeML: '100', quantity: '1', unitPriceUSD: '', type: 'sealed' as ProductType }],
+    items: [{ productId: '0', productName: '', brand: '', sizeML: '100', quantity: '1', unitPriceUSD: '', type: 'sealed' as ProductType, category: 'fragrance' as ProductCategory }],
   })
-  const [activeItemSearch, setActiveItemSearch] = useState<number | null>(null)
 
   const receivingOrder = receivingOrderId != null ? orders.find(o => o.id === receivingOrderId) : null
 
@@ -164,7 +164,7 @@ export function Proveedores() {
     setOForm({
       supplierId: '', exchangeRate: '7500', orderDate: today(), estimatedArrival: '', notes: '',
       localCurrency: false, registerPayment: false, paymentAccountId: '',
-      items: [{ productName: '', brand: '', sizeML: '100', quantity: '1', unitPriceUSD: '', type: 'sealed' as ProductType }],
+      items: [{ productId: '0', productName: '', brand: '', sizeML: '100', quantity: '1', unitPriceUSD: '', type: 'sealed' as ProductType, category: 'fragrance' as ProductCategory }],
     })
     setShowOrder(false)
   }
@@ -826,80 +826,106 @@ export function Proveedores() {
 
           <div>
             <p className="text-sm font-medium text-gray-700 mb-2">Productos del pedido</p>
-            {oForm.items.map((item, i) => (
-              <div key={i} className="mb-3">
-              <div className="grid grid-cols-[1fr_1fr_80px_72px_100px_28px] gap-2 items-start">
-                <Input placeholder="Marca" value={item.brand} onChange={e => setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, brand: e.target.value } : x) }))} />
-                {/* Nombre con autocomplete */}
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="Nombre"
-                    value={item.productName}
-                    onChange={e => {
-                      setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, productName: e.target.value } : x) }))
-                      setActiveItemSearch(i)
-                    }}
-                    onFocus={() => setActiveItemSearch(i)}
-                    onBlur={() => setTimeout(() => setActiveItemSearch(null), 150)}
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent transition-all"
-                    autoComplete="off"
-                  />
-                  {activeItemSearch === i && item.productName.length >= 1 && (() => {
-                    const matches = products.filter(p =>
-                      p.name.toLowerCase().includes(item.productName.toLowerCase()) ||
-                      p.brand.toLowerCase().includes(item.productName.toLowerCase())
-                    ).slice(0, 6)
-                    return matches.length > 0 ? (
-                      <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
-                        {matches.map(p => (
-                          <button
-                            key={p.id}
-                            type="button"
-                            onMouseDown={() => {
-                              // TODO(PROVISIONAL-CATEGORY): sizeML puede ser undefined para relojes/general
-                              setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, productName: p.name, brand: p.brand, sizeML: p.sizeML != null ? String(p.sizeML) : '', type: p.type } : x) }))
-                              setActiveItemSearch(null)
-                            }}
-                            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-violet-50 text-left text-sm border-b border-gray-50 last:border-0"
-                          >
-                            <span className="text-gray-400 text-xs shrink-0">{p.brand}</span>
-                            <span className="font-medium text-gray-900 flex-1 truncate">{p.name}</span>
-                            {p.sizeML != null && <span className="text-xs text-gray-400 shrink-0">{p.sizeML}ml</span>}
-                            {p.sizeML == null && p.category === 'watch' && <span className="text-xs text-gray-400 shrink-0">Reloj</span>}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null
-                  })()}
+            {oForm.items.map((item, i) => {
+              // TODO(PROVISIONAL-CATEGORY): campo ml solo para fragancias
+              const hasSizeML = item.category !== 'watch' && item.category !== 'general'
+              const isExisting = item.productId !== '0'
+
+              return (
+                <div key={i} className="mb-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
+                  {/* Fila 1: buscador con miniatura + botón eliminar */}
+                  <div className="flex gap-2 items-start">
+                    <ProductAutocomplete
+                      value={item.productId}
+                      onChange={id => {
+                        if (!id || id === '0') {
+                          setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, productId: '0', productName: '', brand: '' } : x) }))
+                        }
+                      }}
+                      onProductSelect={p => {
+                        // TODO(PROVISIONAL-CATEGORY): auto-rellena category y sizeML del producto
+                        setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? {
+                          ...x,
+                          productId: String(p.id),
+                          productName: p.name,
+                          brand: p.brand,
+                          sizeML: p.sizeML != null ? String(p.sizeML) : '',
+                          type: p.type,
+                          category: p.category ?? 'fragrance',
+                        } : x) }))
+                      }}
+                      products={products}
+                      placeholder="Buscar producto del inventario..."
+                      showStock={false}
+                      className="flex-1"
+                    />
+                    <button
+                      onClick={() => setOForm(f => ({ ...f, items: f.items.filter((_, j) => j !== i) }))}
+                      disabled={oForm.items.length <= 1}
+                      className="p-1.5 mt-1 text-gray-400 hover:text-red-500 disabled:opacity-30 transition-colors shrink-0 cursor-pointer"
+                    >
+                      <XIcon size={14} />
+                    </button>
+                  </div>
+
+                  {/* Fila 2: Marca + Nombre manual — solo si no hay producto del inventario */}
+                  {!isExisting && (
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+                      <Input
+                        placeholder="Marca (nuevo producto)"
+                        value={item.brand}
+                        onChange={e => setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, brand: e.target.value } : x) }))}
+                      />
+                      <Input
+                        placeholder="Nombre del producto"
+                        value={item.productName}
+                        onChange={e => setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, productName: e.target.value } : x) }))}
+                      />
+                    </div>
+                  )}
+
+                  {/* Fila 3: ml (si aplica) + cantidad + precio */}
+                  <div className={`grid gap-2 mt-2 ${hasSizeML ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                    {hasSizeML && (
+                      <Input
+                        placeholder="ml"
+                        type="number"
+                        value={item.sizeML}
+                        onChange={e => setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, sizeML: e.target.value } : x) }))}
+                      />
+                    )}
+                    <Input
+                      placeholder="Cant."
+                      type="number"
+                      value={item.quantity}
+                      onChange={e => setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, quantity: e.target.value } : x) }))}
+                    />
+                    <Input
+                      placeholder={oForm.localCurrency ? 'Gs. c/u' : 'USD c/u'}
+                      type="number"
+                      value={item.unitPriceUSD}
+                      onChange={e => setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, unitPriceUSD: e.target.value } : x) }))}
+                    />
+                  </div>
+
+                  {/* Fila 4: chips de tipo */}
+                  <div className="flex items-center gap-1 mt-2">
+                    <span className="text-xs text-gray-400 mr-0.5">Tipo:</span>
+                    {(['sealed', 'tester', 'decant_source'] as const).map(t => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, type: t } : x) }))}
+                        className={`text-xs px-2 py-0.5 rounded-full border transition-all cursor-pointer ${item.type === t ? 'bg-violet-100 border-violet-300 text-violet-700 font-medium' : 'border-gray-200 text-gray-400 hover:border-gray-300 hover:text-gray-600'}`}
+                      >
+                        {t === 'sealed' ? 'Sellado' : t === 'tester' ? 'Tester' : 'Para decants'}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <Input placeholder="ml" type="number" value={item.sizeML} onChange={e => setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, sizeML: e.target.value } : x) }))} />
-                <Input placeholder="Cant." type="number" value={item.quantity} onChange={e => setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, quantity: e.target.value } : x) }))} />
-                <Input placeholder={oForm.localCurrency ? 'Gs. c/u' : 'USD c/u'} type="number" value={item.unitPriceUSD} onChange={e => setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, unitPriceUSD: e.target.value } : x) }))} />
-                <button
-                  onClick={() => setOForm(f => ({ ...f, items: f.items.filter((_, j) => j !== i) }))}
-                  disabled={oForm.items.length <= 1}
-                  className="text-gray-400 hover:text-red-500 disabled:opacity-30 transition-colors mt-2"
-                >
-                  <XIcon size={14} />
-                </button>
-              </div>
-              <div className="flex items-center gap-1 mt-1.5 pl-0.5">
-                <span className="text-xs text-gray-400 mr-0.5">Tipo:</span>
-                {(['sealed', 'tester', 'decant_source'] as const).map(t => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => setOForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, type: t } : x) }))}
-                    className={`text-xs px-2 py-0.5 rounded-full border transition-all ${item.type === t ? 'bg-violet-100 border-violet-300 text-violet-700 font-medium' : 'border-gray-200 text-gray-400 hover:border-gray-300 hover:text-gray-600'}`}
-                  >
-                    {t === 'sealed' ? 'Sellado' : t === 'tester' ? 'Tester' : 'Para decants'}
-                  </button>
-                ))}
-              </div>
-              </div>
-            ))}
-            <Button variant="ghost" size="sm" onClick={() => setOForm(f => ({ ...f, items: [...f.items, { productName: '', brand: '', sizeML: '100', quantity: '1', unitPriceUSD: '', type: 'sealed' as ProductType }] }))}>
+              )
+            })}
+            <Button variant="ghost" size="sm" onClick={() => setOForm(f => ({ ...f, items: [...f.items, { productId: '0', productName: '', brand: '', sizeML: '100', quantity: '1', unitPriceUSD: '', type: 'sealed' as ProductType, category: 'fragrance' as ProductCategory }] }))}>
               + Agregar línea
             </Button>
           </div>

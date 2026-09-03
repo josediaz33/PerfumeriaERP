@@ -13,6 +13,7 @@ import { Card, CardBody } from '../components/ui/Card'
 import { Modal } from '../components/ui/Modal'
 import { Input, Select, Textarea } from '../components/ui/Input'
 import { CustomerAutocomplete } from '../components/ui/CustomerAutocomplete'
+import { ProductAutocomplete } from '../components/ui/ProductAutocomplete'
 import { Badge } from '../components/ui/Badge'
 
 const statusColors: Record<BudgetStatus, 'gray' | 'blue' | 'green' | 'red'> = {
@@ -648,16 +649,14 @@ export function Presupuestos() {
                     </select>
 
                     {item.type !== 'custom' ? (
-                      <select
+                      <ProductAutocomplete
                         value={item.productId}
-                        onChange={e => autoFill(i, e.target.value, item.type, item.sizeML)}
-                        className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white min-w-0"
-                      >
-                        <option value="0">Seleccionar producto...</option>
-                        {getProductsForType(item.type).map(p => (
-                          <option key={p.id} value={String(p.id)}>{p.brand} — {p.name}</option>
-                        ))}
-                      </select>
+                        onChange={id => autoFill(i, id, item.type, item.sizeML)}
+                        onProductSelect={p => autoFill(i, String(p.id), item.type, item.sizeML)}
+                        products={getProductsForType(item.type)}
+                        placeholder="Buscar producto..."
+                        className="flex-1 min-w-0"
+                      />
                     ) : <div className="flex-1" />}
 
                     {(item.type === 'decant' || item.type === 'partial') && (

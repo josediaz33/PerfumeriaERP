@@ -12,6 +12,7 @@ import { Card, CardBody } from '../components/ui/Card'
 import { Modal } from '../components/ui/Modal'
 import { Input, Select, Textarea } from '../components/ui/Input'
 import { CustomerAutocomplete } from '../components/ui/CustomerAutocomplete'
+import { ProductAutocomplete } from '../components/ui/ProductAutocomplete'
 import { Badge } from '../components/ui/Badge'
 
 const statusColors: Record<LocalOrderStatus, 'yellow' | 'blue' | 'green' | 'gray' | 'red'> = {
@@ -768,8 +769,10 @@ export function Logistica() {
                       options={[{ value: '', label: 'Insumo...' }, ...supplies.map(s => ({ value: String(s.id), label: `${s.name} (stock: ${s.stock})` }))]}
                     />
                   ) : (
-                    <Select value={item.productId} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, productId: e.target.value } : x) }))}
-                      options={[{ value: '0', label: 'Producto...' }, ...(
+                    <ProductAutocomplete
+                      value={item.productId}
+                      onChange={id => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, productId: id } : x) }))}
+                      products={
                         item.type === 'sealed'
                           ? products.filter(p => p.type === 'sealed')
                           : item.type === 'tester'
@@ -777,7 +780,10 @@ export function Logistica() {
                             : item.type === 'decant' || item.type === 'partial'
                               ? products.filter(p => p.type === 'decant_source')
                               : products
-                      ).map(p => ({ value: String(p.id), label: (item.type === 'decant' || item.type === 'partial') ? `${p.brand} — ${p.name} (${p.stockOpenML > 0 ? p.stockOpenML + 'ml' : 'sin stock'})` : `${p.brand} — ${p.name}` }))]} />
+                      }
+                      placeholder="Producto..."
+                      className="flex-1"
+                    />
                   )}
                   <Select value={item.type} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, type: e.target.value as any, productId: '0', supplyId: '' } : x) }))}
                     options={[{ value: 'sealed', label: 'Sellado' }, { value: 'tester', label: 'Tester' }, { value: 'decant', label: 'Decant' }, { value: 'partial', label: 'Parcial' }, { value: 'supply', label: 'Insumo' }]} />

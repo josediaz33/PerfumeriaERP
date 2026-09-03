@@ -11,6 +11,7 @@ import { Card, CardBody } from '../components/ui/Card'
 import { Modal } from '../components/ui/Modal'
 import { Input, Select, Textarea } from '../components/ui/Input'
 import { CustomerAutocomplete } from '../components/ui/CustomerAutocomplete'
+import { ProductAutocomplete } from '../components/ui/ProductAutocomplete'
 import { Badge } from '../components/ui/Badge'
 
 const paymentLabels: Record<PaymentMethod, string> = {
@@ -60,6 +61,7 @@ export function Ventas() {
   const [addQty, setAddQty] = useState('1')
   const [addPrice, setAddPrice] = useState('')
   const [addPartialML, setAddPartialML] = useState('')
+  // (autocomplete de producto manejado por <ProductAutocomplete>)
 
   // Expandir / editar / eliminar venta
   const [expandedSaleId, setExpandedSaleId] = useState<number | null>(null)
@@ -117,8 +119,9 @@ export function Ventas() {
 
     if (addType === 'sealed') {
       unitCost = product.costPYG
-      // TODO(PROVISIONAL-CATEGORY): sizeML puede ser undefined para relojes/general
-      label = `${product.brand} — ${product.name}${product.sizeML ? ` ${product.sizeML}ml` : ''} (sellado)`
+      // TODO(PROVISIONAL-CATEGORY): label adaptativo según categoría del producto
+      const saleTypeLabel = (product.category === 'watch' || product.category === 'general') ? 'unidad' : 'sellado'
+      label = `${product.brand} — ${product.name}${product.sizeML ? ` ${product.sizeML}ml` : ''} (${saleTypeLabel})`
 
       // Compute FIFO lot origin info
       const qty = parseInt(addQty) || 1
@@ -176,6 +179,7 @@ export function Ventas() {
     setAddPrice('')
     setAddQty('1')
     setAddPartialML('')
+    setAddProduct('0')
   }
 
   const cartTotal = cart.reduce((s, i) => s + i.quantity * i.unitPrice, 0)
@@ -405,6 +409,9 @@ export function Ventas() {
   const decantProducts = products.filter(p => p.type === 'decant_source')
   const sealedProducts = products.filter(p => p.type === 'sealed' || p.type === 'tester')
 
+  // Pool de productos según tab activo (lo pasa <ProductAutocomplete>)
+  const addableProducts = addType === 'sealed' ? sealedProducts : decantProducts
+
   return (
     <div>
       <PageHeader
@@ -631,13 +638,25 @@ export function Ventas() {
           {/* Agregar producto */}
           <div className="bg-gray-50 rounded-xl p-4 space-y-3">
             <p className="text-sm font-medium text-gray-700">Agregar producto</p>
+            {/* Tabs de tipo */}
             <div className="flex gap-2">
               {(['sealed', 'decant', 'partial', 'supply'] as const).map(t => (
-                <button key={t} onClick={() => { setAddType(t); setAddProduct('0'); setAddPartialML(''); setAddSupply('0') }} className={`flex-1 py-2 rounded-lg text-sm font-medium cursor-pointer ${addType === t ? 'bg-violet-600 text-white' : 'bg-white border border-gray-200 text-gray-600'}`}>
+                <button
+                  key={t}
+                  onClick={() => {
+                    setAddType(t)
+                    setAddProduct('0')
+                    setAddPartialML('')
+                    setAddSupply('0')
+                  }}
+                  className={`flex-1 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors ${addType === t ? 'bg-violet-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-violet-300'}`}
+                >
                   {t === 'sealed' ? 'Sellado' : t === 'decant' ? 'Decant' : t === 'partial' ? 'Parcial' : 'Insumo'}
                 </button>
               ))}
             </div>
+
+            {/* Selector de producto / insumo */}
             {addType === 'supply' ? (
               <Select
                 label="Insumo"
@@ -645,32 +664,18 @@ export function Ventas() {
                 onChange={e => setAddSupply(e.target.value)}
                 options={[
                   { value: '0', label: 'Seleccionar...' },
-                  ...allSupplies.map(s => ({
-                    value: String(s.id),
-                    label: `${s.name} (stock: ${s.stock})`,
-                  })),
+                  ...allSupplies.map(s => ({ value: String(s.id), label: `${s.name} (stock: ${s.stock})` })),
                 ]}
               />
             ) : (
-              <Select
+              <ProductAutocomplete
                 label={addType === 'partial' ? 'Producto (frasco abierto)' : 'Producto'}
                 value={addProduct}
-                onChange={e => {
-                  setAddProduct(e.target.value)
-                  if (addType === 'partial') {
-                    const prod = products.find(p => p.id === parseInt(e.target.value))
-                    if (prod) setAddPartialML(String(prod.stockOpenML))
-                  }
+                onChange={id => setAddProduct(id)}
+                onProductSelect={p => {
+                  if (addType === 'partial') setAddPartialML(String(p.stockOpenML))
                 }}
-                options={[
-                  { value: '0', label: 'Seleccionar...' },
-                  ...(addType === 'sealed' ? sealedProducts : decantProducts).map(p => ({
-                    value: String(p.id),
-                    label: addType === 'partial'
-                      ? `${p.brand} — ${p.name} (${p.stockOpenML > 0 ? p.stockOpenML + 'ml' : 'sin stock'})`
-                      : `${p.brand} — ${p.name}`,
-                  })),
-                ]}
+                products={addableProducts}
               />
             )}
             {addType === 'decant' && (

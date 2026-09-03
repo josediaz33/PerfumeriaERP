@@ -13,7 +13,12 @@ export async function compressImage(
       const canvas = document.createElement('canvas')
       canvas.width = w
       canvas.height = h
-      canvas.getContext('2d')!.drawImage(img, 0, 0, w, h)
+      const ctx = canvas.getContext('2d')!
+      // Rellenar con blanco antes de dibujar: evita que PNG/AVIF con transparencia
+      // se conviertan a negro al exportar como JPEG (que no soporta canal alfa).
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, w, h)
+      ctx.drawImage(img, 0, 0, w, h)
       canvas.toBlob(
         blob => {
           if (!blob) { reject(new Error('canvas.toBlob failed')); return }
