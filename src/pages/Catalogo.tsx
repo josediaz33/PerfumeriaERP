@@ -319,7 +319,12 @@ export function Catalogo() {
   }
 
   // ── CATX-07/08/09: Mini portal de pedidos — HTML autocontenido, interactivo, compatible iOS ──
-  async function buildCatalogHTML(): Promise<{ html: string; filename: string }> {
+  // buildCatalogHTML acepta un subconjunto de productos y un label opcional.
+  // Sin parámetros exporta todo el catálogo disponible (comportamiento original).
+  async function buildCatalogHTML(
+    productsToExport?: Product[],
+    filterLabel?: string,
+  ): Promise<{ html: string; filename: string }> {
     const configName = await db.config.where('key').equals('business_name').first()
     const businessName = configName?.value || 'JODA Parfums'
     const configPhone = await db.config.where('key').equals('business_phone').first()
@@ -332,8 +337,8 @@ export function Catalogo() {
     const logoImg = await db.images.get('business-logo')
     const logoSrc = logoImg ? await blobToBase64(logoImg.blob) : null
 
-    // El export usa catalogAvailable (no los filtros de la vista interna)
-    const exportProducts = catalogAvailable
+    // Si se pasa productsToExport, exporta ese subconjunto; si no, exporta todo el catálogo visible.
+    const exportProducts = productsToExport ?? catalogAvailable
     const n = exportProducts.length
     const date = new Date().toLocaleDateString('es-PY', { year: 'numeric', month: 'long', day: 'numeric' })
 
@@ -708,7 +713,7 @@ footer b{color:#8b6a3e;font-weight:600}
       '<meta charset="UTF-8"/>\n' +
       '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover"/>\n' +
       '<meta name="theme-color" content="#141212"/>\n' +
-      '<title>' + escHtml(businessName) + ' — Catálogo</title>\n' +
+      '<title>' + escHtml(businessName) + (filterLabel ? ' — ' + escHtml(filterLabel) : ' — Catálogo') + '</title>\n' +
       '<style>\n' + css + '\n</style>\n' +
       '</head>\n<body>\n' +
       '<div id="top"></div>\n' +
@@ -726,7 +731,7 @@ footer b{color:#8b6a3e;font-weight:600}
       '  <div class="lb">' + logoHtml + '</div>\n' +
       '  <div class="ht">\n' +
       '    <div class="hn">' + escHtml(businessName) + '</div>\n' +
-      '    <div class="hs">Cat&aacute;logo de Fragancias' + (businessPhone ? ' &middot; ' + escHtml(businessPhone) : '') + '</div>\n' +
+      '    <div class="hs">' + (filterLabel ? escHtml(filterLabel) : 'Cat&aacute;logo de Fragancias') + (businessPhone ? ' &middot; ' + escHtml(businessPhone) : '') + '</div>\n' +
       '  </div>\n' +
       '  <span class="hd">' + date + '</span>\n' +
       '</header>\n' +
@@ -753,12 +758,45 @@ footer b{color:#8b6a3e;font-weight:600}
       '<script>\n' + js + '\n</script>\n' +
       '</body>\n</html>'
 
-    const filename = escHtml(businessName).replace(/[^a-zA-Z0-9]/g, '-') + '-catalogo.html'
+    const slug = filterLabel
+      ? filterLabel.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase()
+      : 'catalogo'
+    const filename = escHtml(businessName).replace(/[^a-zA-Z0-9]/g, '-') + '-' + slug + '.html'
     return { html, filename }
   }
 
   async function exportHTML() {
-    const { html, filename } = await buildCatalogHTML()
+    // Detectar si hay filtros activos para exportar solo el subconjunto filtrado
+    const hasFilters = filterType !== 'all' || filterFamily !== 'all' ||
+      filterCatSlug !== 'all' || !!search || !!minPrice || !!maxPrice
+
+    let exportProducts: Product[] | undefined
+    let filterLabel: string | undefined
+
+    if (hasFilters) {
+      // Exportar solo los productos que el usuario ve ahora
+      exportProducts = filtered
+      // Construir un label legible que describe el filtro activo
+      const parts: string[] = []
+      if (filterCatSlug !== 'all') {
+        const cat = allCategories.find(c => c.id === filterCatSlug)
+        if (cat) parts.push((cat.emoji ? cat.emoji + ' ' : '') + cat.name)
+      }
+      if (filterFamily !== 'all') {
+        const fam = families.find(f => f.value === filterFamily)
+        if (fam) parts.push(fam.label)
+      }
+      if (filterType === 'sealed') parts.push('Sellados')
+      else if (filterType === 'decant') parts.push('Para decants')
+      if (search) parts.push(`"${search}"`)
+      if (minPrice || maxPrice) {
+        const range = [minPrice && `desde Gs. ${parseInt(minPrice).toLocaleString('es-PY')}`, maxPrice && `hasta Gs. ${parseInt(maxPrice).toLocaleString('es-PY')}`].filter(Boolean).join(' ')
+        parts.push(range)
+      }
+      filterLabel = parts.length > 0 ? parts.join(' · ') : 'Filtrado'
+    }
+
+    const { html, filename } = await buildCatalogHTML(exportProducts, filterLabel)
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
     const blobUrl = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -852,7 +890,21 @@ footer b{color:#8b6a3e;font-weight:600}
           <Button variant="secondary" size="sm" icon={<Globe size={14} />} onClick={publishGitHub} disabled={publishing}>
             {publishing ? 'Publicando...' : 'Publicar'}
           </Button>
-          <Button variant="secondary" size="sm" icon={<FileCode size={14} />} onClick={exportHTML}>HTML</Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<FileCode size={14} />}
+            onClick={exportHTML}
+            title={
+              (filterType !== 'all' || filterFamily !== 'all' || filterCatSlug !== 'all' || search || minPrice || maxPrice)
+                ? `Exportar ${filtered.length} producto${filtered.length !== 1 ? 's' : ''} filtrados`
+                : 'Exportar catálogo completo'
+            }
+          >
+            {(filterType !== 'all' || filterFamily !== 'all' || filterCatSlug !== 'all' || search || minPrice || maxPrice)
+              ? `HTML (${filtered.length})`
+              : 'HTML'}
+          </Button>
           <Button variant="secondary" size="sm" icon={<Download size={14} />} onClick={exportPDF}>PDF</Button>
         </div>
       </div>
@@ -1075,14 +1127,17 @@ footer b{color:#8b6a3e;font-weight:600}
                   <span className={`absolute top-2 left-2 text-[10px] font-semibold px-2 py-0.5 rounded-full backdrop-blur-sm ${typePill}`}>
                     {typeLabel}
                   </span>
-                  {/* Botón visibilidad catálogo */}
-                  <button
+                  {/* Toggle visibilidad — div en lugar de button para evitar button>button (inválido en HTML) */}
+                  <div
+                    role="button"
+                    tabIndex={0}
                     title={eyeTitle}
                     onClick={e => { e.stopPropagation(); toggleCatalogVisible(p) }}
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); toggleCatalogVisible(p) } }}
                     className={`absolute top-2 right-2 p-1 rounded-full backdrop-blur-sm transition-colors cursor-pointer ${eyeBtnClass}`}
                   >
                     {isHidden || (!hasStock && !isForced) ? <EyeOff size={11} /> : <Eye size={11} />}
-                  </button>
+                  </div>
                   {/* Badge "Sin stock" para productos no forzados */}
                   {!hasStock && !isForced && (
                     <div className="absolute bottom-0 inset-x-0 bg-orange-400/80 backdrop-blur-sm text-white text-[9px] font-semibold text-center py-0.5">

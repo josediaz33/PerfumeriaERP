@@ -93,6 +93,7 @@ export function Inventario() {
   const [showForm, setShowForm] = useState(false)
   const [editId, setEditId] = useState<number | null>(null)
   const [form, setForm] = useState(emptyDefForm)
+  const [formError, setFormError] = useState('')   // error visible en el modal de producto
   const [editImages, setEditImages] = useState<{ id: string; url: string }[]>([])
   const [imageUploading, setImageUploading] = useState(false)
   const imageUrlsRef = useRef<string[]>([])
@@ -143,12 +144,14 @@ export function Inventario() {
     imageUrlsRef.current.forEach(u => URL.revokeObjectURL(u))
     imageUrlsRef.current = []
     setEditImages([])
+    setFormError('')
     setShowForm(false)
   }
 
   function openNew() {
     setEditId(null)
     setForm(emptyDefForm)
+    setFormError('')
     imageUrlsRef.current.forEach(u => URL.revokeObjectURL(u))
     imageUrlsRef.current = []
     setEditImages([])
@@ -237,7 +240,13 @@ export function Inventario() {
   }
 
   async function handleSave() {
-    if (!form.name.trim() || !form.brand.trim()) return
+    setFormError('')
+
+    // Validaciones con mensaje visible (ya no retorna silenciosamente)
+    if (!form.name.trim()) { setFormError('El nombre del producto es obligatorio.'); return }
+    if (!form.brand.trim()) { setFormError('La marca es obligatoria.'); return }
+
+    try {
     const now = nowISO()
     const decantPrices = form.type === 'decant_source' ? {
       price3ML: parseFloat(form.price3ML) || undefined,
@@ -256,7 +265,7 @@ export function Inventario() {
         await db.products.update(editId, {
           name: form.name, brand: form.brand,
           category: form.category,
-          categoryIds: form.categoryIds.length > 0 ? form.categoryIds : undefined,
+          categoryIds: (form.categoryIds ?? []).length > 0 ? form.categoryIds : undefined,
           olfactiveFamily: isFragrance ? form.olfactiveFamily : undefined,
           concentration: isFragrance ? form.concentration : undefined,
           sizeML: isFragrance ? (parseFloat(form.sizeML) || undefined) : undefined,
@@ -301,7 +310,7 @@ export function Inventario() {
       await db.products.add({
         name: form.name, brand: form.brand,
         category: form.category,
-        categoryIds: form.categoryIds.length > 0 ? form.categoryIds : undefined,
+        categoryIds: (form.categoryIds ?? []).length > 0 ? form.categoryIds : undefined,
         olfactiveFamily: isFragrance ? form.olfactiveFamily : undefined,
         concentration: isFragrance ? form.concentration : undefined,
         sizeML: isFragrance ? (parseFloat(form.sizeML) || undefined) : undefined,
@@ -314,6 +323,14 @@ export function Inventario() {
       })
     }
     closeForm()
+    } catch (err) {
+      console.error('[Inventario] Error al guardar producto:', err)
+      setFormError(
+        err instanceof Error
+          ? `Error al guardar: ${err.message}`
+          : 'Ocurrió un error inesperado al guardar. Revisá los datos e intentá de nuevo.'
+      )
+    }
   }
 
   // ── Asignación masiva de categorías ──────────────────────────────────────
@@ -1645,7 +1662,13 @@ export function Inventario() {
             </div>
           )}
         </div>
-        <div className="flex gap-2 mt-6">
+        {formError && (
+          <div className="mt-4 flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-700">
+            <AlertTriangle size={15} className="shrink-0 mt-0.5" />
+            <span>{formError}</span>
+          </div>
+        )}
+        <div className="flex gap-2 mt-4">
           <Button variant="secondary" className="flex-1" onClick={closeForm}>Cancelar</Button>
           <Button className="flex-1" onClick={handleSave}>{editId ? 'Guardar cambios' : 'Crear producto'}</Button>
         </div>
