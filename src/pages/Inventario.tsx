@@ -1,6 +1,6 @@
 import { useState, Fragment, useRef, useEffect, useMemo } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { Plus, Package, Search, AlertTriangle, Edit2, Trash2, Info, ChevronDown, ChevronRight, Truck, X, Droplets, ImageIcon, Upload, Tags } from 'lucide-react'
+import { Plus, Package, Search, AlertTriangle, Edit2, Trash2, Info, ChevronDown, ChevronRight, Truck, X, Droplets, ImageIcon, Upload, Tags, Save } from 'lucide-react'
 import { db } from '../db/db'
 import type { Category, Concentration, OlfactiveFamily, Product, ProductCategory, ProductType, StockEntry } from '../db/types'
 import { CategoryBadge } from '../components/ui/CategoryBadge'
@@ -82,6 +82,13 @@ export function Inventario() {
   // Filtro por categoría dinámica (slug) — sistema v2.6
   const [filterCatSlug, setFilterCatSlug] = useState<string>('all')
   const [expandedProductId, setExpandedProductId] = useState<number | null>(null)
+
+  // ── Modo asignación masiva de categorías ─────────────────────────────────
+  const [bulkCatMode, setBulkCatMode] = useState(false)
+  const [bulkSearch, setBulkSearch] = useState('')
+  // Map local de cambios pendientes: productId → Set<slug>
+  // Se inicializa con los categoryIds actuales de cada producto al entrar al modo
+  const [bulkDraft, setBulkDraft] = useState<Map<number, Set<string>>>(new Map())
 
   const [showForm, setShowForm] = useState(false)
   const [editId, setEditId] = useState<number | null>(null)
@@ -308,6 +315,54 @@ export function Inventario() {
     }
     closeForm()
   }
+
+  // ── Asignación masiva de categorías ──────────────────────────────────────
+
+  function enterBulkCatMode() {
+    // Inicializar el draft con el estado actual de cada producto
+    const draft = new Map<number, Set<string>>()
+    for (const p of products) {
+      draft.set(p.id!, new Set(p.categoryIds ?? []))
+    }
+    setBulkDraft(draft)
+    setBulkSearch('')
+    setBulkCatMode(true)
+  }
+
+  function toggleBulkCell(productId: number, slug: string) {
+    setBulkDraft(prev => {
+      const next = new Map(prev)
+      const set = new Set(next.get(productId) ?? [])
+      if (set.has(slug)) set.delete(slug)
+      else set.add(slug)
+      next.set(productId, set)
+      return next
+    })
+  }
+
+  async function saveBulkCat() {
+    const now = nowISO()
+    const updates: Product[] = []
+    for (const p of products) {
+      const newSet = bulkDraft.get(p.id!) ?? new Set()
+      const newIds = [...newSet].sort()
+      const oldIds = [...(p.categoryIds ?? [])].sort()
+      if (JSON.stringify(newIds) !== JSON.stringify(oldIds)) {
+        updates.push({ ...p, categoryIds: newIds.length > 0 ? newIds : undefined, updatedAt: now })
+      }
+    }
+    if (updates.length > 0) {
+      await db.products.bulkPut(updates)
+    }
+    setBulkCatMode(false)
+  }
+
+  // Productos filtrados en modo bulk (por búsqueda de texto)
+  const bulkFiltered = products.filter(p =>
+    !bulkSearch ||
+    p.name.toLowerCase().includes(bulkSearch.toLowerCase()) ||
+    p.brand.toLowerCase().includes(bulkSearch.toLowerCase())
+  )
 
   async function handleOpenForDecants(p: Product) {
     if (p.stockSealed < 1) return
@@ -879,6 +934,11 @@ export function Inventario() {
         subtitle="Perfumes sellados y botellas para decants"
         action={
           <div className="flex gap-2">
+            {allCategories.length > 0 && (
+              <Button variant="secondary" icon={<Tags size={15} />} onClick={enterBulkCatMode}>
+                Asignar categorías
+              </Button>
+            )}
             <Button variant="secondary" icon={<Truck size={15} />} onClick={() => setShowBatch(true)}>Lote de envío</Button>
             <Button variant="secondary" icon={<Plus size={15} />} onClick={() => openIngresar()}>Ingresar stock</Button>
             <Button icon={<Plus size={15} />} onClick={openNew}>Nuevo producto</Button>
@@ -1253,6 +1313,130 @@ export function Inventario() {
           </div>
         )}
       </Card>
+
+      {/* ── Modal Asignación masiva de categorías ── */}
+      <Modal
+        isOpen={bulkCatMode}
+        onClose={() => setBulkCatMode(false)}
+        title="Asignación masiva de categorías"
+        size="xl"
+      >
+        <div className="flex flex-col gap-3" style={{ maxHeight: '75vh' }}>
+          {/* Barra búsqueda + leyenda */}
+          <div className="flex items-center gap-3 flex-shrink-0">
+            <div className="relative flex-1">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                autoFocus
+                type="text"
+                placeholder="Buscar por nombre o marca…"
+                value={bulkSearch}
+                onChange={e => setBulkSearch(e.target.value)}
+                className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+            </div>
+            <span className="text-xs text-gray-400 whitespace-nowrap flex-shrink-0">
+              {bulkFiltered.length} producto{bulkFiltered.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+
+          {/* Leyenda de categorías */}
+          <div className="flex flex-wrap gap-1.5 flex-shrink-0">
+            {allCategories.map(cat => (
+              <span
+                key={cat.id}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-medium"
+                style={{
+                  backgroundColor: (cat.color ?? '#6d28d9') + '20',
+                  color: cat.color ?? '#6d28d9',
+                  borderColor: (cat.color ?? '#6d28d9') + '50',
+                }}
+              >
+                {cat.emoji && <span>{cat.emoji}</span>}
+                {cat.name}
+              </span>
+            ))}
+          </div>
+
+          {/* Tabla scroll */}
+          <div className="overflow-auto flex-1 border border-gray-100 rounded-xl">
+            <table className="w-full text-sm border-collapse">
+              <thead className="sticky top-0 bg-white z-10 shadow-sm">
+                <tr>
+                  <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 border-b border-gray-100 min-w-[200px]">
+                    Producto
+                  </th>
+                  {allCategories.map(cat => (
+                    <th
+                      key={cat.id}
+                      className="px-2 py-2.5 text-center border-b border-gray-100 min-w-[52px]"
+                      title={cat.name}
+                    >
+                      <span className="text-base leading-none">{cat.emoji ?? cat.name.slice(0, 2)}</span>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {bulkFiltered.map((p, i) => {
+                  const catSet = bulkDraft.get(p.id!) ?? new Set()
+                  return (
+                    <tr
+                      key={p.id}
+                      className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}
+                    >
+                      <td className="px-3 py-1.5 border-b border-gray-50">
+                        <p className="font-medium text-gray-800 truncate max-w-[220px]">{p.name}</p>
+                        <p className="text-[10px] text-gray-400 truncate">{p.brand}</p>
+                      </td>
+                      {allCategories.map(cat => {
+                        const active = catSet.has(cat.id)
+                        return (
+                          <td key={cat.id} className="text-center px-2 py-1.5 border-b border-gray-50">
+                            <button
+                              type="button"
+                              onClick={() => toggleBulkCell(p.id!, cat.id)}
+                              className={`w-7 h-7 rounded-lg border-2 flex items-center justify-center mx-auto transition-all cursor-pointer ${
+                                active
+                                  ? 'border-transparent text-white'
+                                  : 'border-gray-200 bg-white text-transparent hover:border-gray-300'
+                              }`}
+                              style={active ? {
+                                backgroundColor: cat.color ?? '#6d28d9',
+                                borderColor: cat.color ?? '#6d28d9',
+                              } : {}}
+                              title={`${active ? 'Quitar' : 'Asignar'} ${cat.name} a ${p.name}`}
+                            >
+                              ✓
+                            </button>
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
+                {bulkFiltered.length === 0 && (
+                  <tr>
+                    <td colSpan={allCategories.length + 1} className="text-center py-8 text-gray-400 text-sm">
+                      No hay productos que coincidan con la búsqueda
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Acciones */}
+          <div className="flex justify-end gap-2 flex-shrink-0 pt-1">
+            <Button variant="secondary" onClick={() => setBulkCatMode(false)}>
+              Cancelar
+            </Button>
+            <Button icon={<Save size={15} />} onClick={saveBulkCat}>
+              Guardar asignaciones
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* ── Modal Nuevo / Editar Producto ── */}
       <Modal isOpen={showForm} onClose={closeForm} title={editId ? 'Editar producto' : 'Nuevo producto'} size="xl">
