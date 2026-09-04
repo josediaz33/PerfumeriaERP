@@ -1,8 +1,9 @@
-import { useState, Fragment, useRef, useEffect } from 'react'
+import { useState, Fragment, useRef, useEffect, useMemo } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { Plus, Package, Search, AlertTriangle, Edit2, Trash2, Info, ChevronDown, ChevronRight, Truck, X, Droplets, ImageIcon, Upload } from 'lucide-react'
+import { Plus, Package, Search, AlertTriangle, Edit2, Trash2, Info, ChevronDown, ChevronRight, Truck, X, Droplets, ImageIcon, Upload, Tags } from 'lucide-react'
 import { db } from '../db/db'
-import type { Concentration, OlfactiveFamily, Product, ProductCategory, ProductType, StockEntry } from '../db/types'
+import type { Category, Concentration, OlfactiveFamily, Product, ProductCategory, ProductType, StockEntry } from '../db/types'
+import { CategoryBadge } from '../components/ui/CategoryBadge'
 import { fmtPYG, fmtUSD, fmtDate, today, nowISO } from '../lib/format'
 import { compressImage, createObjectURL } from '../lib/images'
 
@@ -44,6 +45,7 @@ const emptyDefForm = {
   costPYG: '0', stockSealed: '0', stockOpenML: '0',
   price3ML: '', price5ML: '', price10ML: '', price30ML: '',
   catalogVisible: true,
+  categoryIds: [] as string[],  // sistema categorías dinámicas v2.6
 }
 
 interface BatchFormItem {
@@ -67,12 +69,18 @@ export function Inventario() {
   const accounts = useLiveQuery(() => db.accounts.filter(a => a.isActive !== false).toArray()) ?? []
   const products = useLiveQuery(() => db.products.orderBy('brand').toArray()) ?? []
   const allEntries = useLiveQuery(() => db.stockEntries.orderBy('date').toArray()) ?? []
+  const allCategories = useLiveQuery(() => db.categories.orderBy('sortOrder').toArray()) ?? []
+
+  // Mapa slug → Category para resolución rápida sin iterar el array
+  const catMap = useMemo(() => new Map(allCategories.map(c => [c.id, c])), [allCategories])
 
   const [search, setSearch] = useState('')
   const [filterType, setFilterType] = useState<'all' | ProductType>('all')
   const [filterFamily, setFilterFamily] = useState<string>('all')
   // TODO(PROVISIONAL-CATEGORY): filtro por categoría provisional hasta Fase 6
   const [filterCategory, setFilterCategory] = useState<'all' | ProductCategory>('all')
+  // Filtro por categoría dinámica (slug) — sistema v2.6
+  const [filterCatSlug, setFilterCatSlug] = useState<string>('all')
   const [expandedProductId, setExpandedProductId] = useState<number | null>(null)
 
   const [showForm, setShowForm] = useState(false)
@@ -114,6 +122,8 @@ export function Inventario() {
     }
     // Familia olfativa solo aplica a fragancias
     if (filterFamily !== 'all' && (p.category ?? 'fragrance') === 'fragrance' && p.olfactiveFamily !== filterFamily) return false
+    // Filtro por categoría dinámica (slug): el producto debe tener el slug en su lista
+    if (filterCatSlug !== 'all' && !(p.categoryIds ?? []).includes(filterCatSlug)) return false
     if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.brand.toLowerCase().includes(search.toLowerCase())) return false
     return true
   })
@@ -157,6 +167,7 @@ export function Inventario() {
       price5ML: p.price5ML ? String(p.price5ML) : '',
       price10ML: p.price10ML ? String(p.price10ML) : '',
       price30ML: p.price30ML ? String(p.price30ML) : '',
+      categoryIds: p.categoryIds ?? [],
     })
     // Cargar imágenes existentes
     imageUrlsRef.current.forEach(u => URL.revokeObjectURL(u))
@@ -238,6 +249,7 @@ export function Inventario() {
         await db.products.update(editId, {
           name: form.name, brand: form.brand,
           category: form.category,
+          categoryIds: form.categoryIds.length > 0 ? form.categoryIds : undefined,
           olfactiveFamily: isFragrance ? form.olfactiveFamily : undefined,
           concentration: isFragrance ? form.concentration : undefined,
           sizeML: isFragrance ? (parseFloat(form.sizeML) || undefined) : undefined,
@@ -282,6 +294,7 @@ export function Inventario() {
       await db.products.add({
         name: form.name, brand: form.brand,
         category: form.category,
+        categoryIds: form.categoryIds.length > 0 ? form.categoryIds : undefined,
         olfactiveFamily: isFragrance ? form.olfactiveFamily : undefined,
         concentration: isFragrance ? form.concentration : undefined,
         sizeML: isFragrance ? (parseFloat(form.sizeML) || undefined) : undefined,
@@ -917,6 +930,21 @@ export function Inventario() {
           <option value="all">Todas las familias</option>
           {families.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
         </select>
+        {/* Filtro por categoría dinámica (v2.6) — solo aparece si hay categorías creadas */}
+        {allCategories.length > 0 && (
+          <select
+            className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500"
+            value={filterCatSlug}
+            onChange={e => setFilterCatSlug(e.target.value)}
+          >
+            <option value="all">Todas las categorías</option>
+            {allCategories.map(c => (
+              <option key={c.id} value={c.id}>
+                {c.emoji ? `${c.emoji} ` : ''}{c.name}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       {/* Tabla */}
@@ -994,6 +1022,15 @@ export function Inventario() {
                                 {(p.category ?? 'fragrance') === 'fragrance' && p.sizeML && ` · ${p.sizeML}ml`}
                                 {p.category === 'watch' && ' · Reloj'}
                               </p>
+                              {/* Badges de categorías dinámicas */}
+                              {p.categoryIds && p.categoryIds.length > 0 && (
+                                <div className="flex flex-wrap gap-0.5 mt-1">
+                                  {p.categoryIds.map(slug => {
+                                    const cat = catMap.get(slug)
+                                    return cat ? <CategoryBadge key={slug} category={cat} size="sm" /> : null
+                                  })}
+                                </div>
+                              )}
                             </div>
                           </div>
                         </td>
@@ -1238,6 +1275,59 @@ export function Inventario() {
               ⚠ Provisional — en Fase 6 (BD relacional) cada categoría tendrá su propio módulo
             </p>
           </div>
+
+          {/* Categorías dinámicas (v2.6) — género, estilo, colección… */}
+          {allCategories.length > 0 && (
+            <div className="col-span-2">
+              <p className="text-sm font-medium text-gray-700 mb-2 flex items-center gap-1.5">
+                <Tags size={13} className="text-violet-500" />
+                Etiquetas / Categorías
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {allCategories.map(cat => {
+                  const selected = form.categoryIds.includes(cat.id)
+                  return (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setForm(f => ({
+                        ...f,
+                        categoryIds: selected
+                          ? f.categoryIds.filter(id => id !== cat.id)
+                          : [...f.categoryIds, cat.id],
+                      }))}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs font-medium transition-all ${
+                        selected
+                          ? 'ring-2 ring-offset-1'
+                          : 'opacity-50 hover:opacity-80'
+                      }`}
+                      style={{
+                        backgroundColor: (cat.color ?? '#6d28d9') + '20',
+                        color: cat.color ?? '#6d28d9',
+                        borderColor: (cat.color ?? '#6d28d9') + '60',
+                        ringColor: cat.color ?? '#6d28d9',
+                      }}
+                      title={selected ? `Quitar ${cat.name}` : `Agregar ${cat.name}`}
+                    >
+                      {cat.emoji && <span>{cat.emoji}</span>}
+                      <span>{cat.name}</span>
+                      {selected && <span className="ml-0.5 font-bold">✓</span>}
+                    </button>
+                  )
+                })}
+              </div>
+              {form.categoryIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, categoryIds: [] }))}
+                  className="text-xs text-gray-400 hover:text-gray-600 mt-1.5"
+                >
+                  Quitar todas
+                </button>
+              )}
+            </div>
+          )}
+
           {form.category === 'fragrance' && (
             <>
               <Select label="Concentración" value={form.concentration} onChange={e => setForm(f => ({ ...f, concentration: e.target.value as Concentration }))} options={concentrations.map(c => ({ value: c, label: c }))} />

@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
-import { Settings, Save, Download, Upload, RefreshCw, ImageIcon, X, Lock, LockOpen, Globe, Palette } from 'lucide-react'
+import { Settings, Save, Download, Upload, RefreshCw, ImageIcon, X, Lock, LockOpen, Globe, Palette, Tags, Plus, Pencil, Trash2, GripVertical } from 'lucide-react'
+import { useLiveQuery } from 'dexie-react-hooks'
 import { db, getConfig, setConfig } from '../db/db'
+import type { Category, CategoryType } from '../db/types'
 import { compressImage, blobToBase64, base64ToBlob, createObjectURL } from '../lib/images'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
@@ -124,6 +126,92 @@ export function Configuracion() {
     await setConfig('brand_color', key)
   }
 
+  // ─── Categorías ─────────────────────────────────────────────────────────────
+
+  const categories = useLiveQuery(
+    () => db.categories.orderBy('sortOrder').toArray(),
+    []
+  ) ?? []
+
+  // Form para crear / editar una categoría
+  const emptyCatForm = {
+    id: '',        // slug — editable solo al crear
+    name: '',
+    type: 'gender' as CategoryType,
+    emoji: '',
+    color: '',
+  }
+  const [catForm, setCatForm] = useState(emptyCatForm)
+  const [editingCat, setEditingCat] = useState<string | null>(null)  // slug en edición
+  const [catError, setCatError] = useState('')
+  const [showCatForm, setShowCatForm] = useState(false)
+
+  function openNewCat() {
+    setCatForm(emptyCatForm)
+    setEditingCat(null)
+    setCatError('')
+    setShowCatForm(true)
+  }
+
+  function openEditCat(cat: Category) {
+    setCatForm({ id: cat.id, name: cat.name, type: cat.type, emoji: cat.emoji ?? '', color: cat.color ?? '' })
+    setEditingCat(cat.id)
+    setCatError('')
+    setShowCatForm(true)
+  }
+
+  async function handleSaveCat() {
+    setCatError('')
+    const slug = catForm.id.trim().toLowerCase().replace(/\s+/g, '-')
+    if (!slug) { setCatError('El slug (ID) es obligatorio.'); return }
+    if (!catForm.name.trim()) { setCatError('El nombre es obligatorio.'); return }
+    if (!/^[a-z0-9-]+$/.test(slug)) { setCatError('El slug solo puede tener letras minúsculas, números y guiones.'); return }
+
+    if (editingCat) {
+      // Editar existente — el slug (id) no cambia, solo los otros campos
+      await db.categories.update(editingCat, {
+        name: catForm.name.trim(),
+        type: catForm.type,
+        emoji: catForm.emoji.trim() || undefined,
+        color: catForm.color.trim() || undefined,
+      })
+    } else {
+      const exists = await db.categories.get(slug)
+      if (exists) { setCatError(`Ya existe una categoría con slug '${slug}'.`); return }
+      const maxOrder = categories.length > 0 ? Math.max(...categories.map(c => c.sortOrder)) : 0
+      await db.categories.add({
+        id: slug,
+        name: catForm.name.trim(),
+        type: catForm.type,
+        emoji: catForm.emoji.trim() || undefined,
+        color: catForm.color.trim() || undefined,
+        sortOrder: maxOrder + 1,
+        createdAt: new Date().toISOString(),
+      })
+    }
+    setShowCatForm(false)
+    setCatForm(emptyCatForm)
+    setEditingCat(null)
+  }
+
+  async function handleDeleteCat(slug: string) {
+    // Contar cuántos productos usan esta categoría antes de borrar
+    const count = await db.products.where('categoryIds').equals(slug).count()
+    const msg = count > 0
+      ? `¿Eliminar categoría '${slug}'? Está asignada a ${count} producto(s). Se eliminará de esos productos también.`
+      : `¿Eliminar categoría '${slug}'?`
+    if (!confirm(msg)) return
+
+    await db.categories.delete(slug)
+    // Limpiar el slug de todos los productos que lo tenían
+    if (count > 0) {
+      const affected = await db.products.where('categoryIds').equals(slug).toArray()
+      await db.products.bulkPut(
+        affected.map(p => ({ ...p, categoryIds: (p.categoryIds ?? []).filter(id => id !== slug) }))
+      )
+    }
+  }
+
   async function handleSaveGitHub() {
     await setConfig('github_token', ghToken.trim())
     await setConfig('github_username', ghUser.trim())
@@ -144,10 +232,11 @@ export function Configuracion() {
     )
     const data = {
       exportedAt: new Date().toISOString(),
-      version: 2,
+      version: 3,  // v3: incluye tabla categories (sistema categorías dinámicas v2.6)
       accounts: await db.accounts.toArray(),
       movements: await db.movements.toArray(),
       products: await db.products.toArray(),
+      categories: await db.categories.toArray(),
       stockEntries: await db.stockEntries.toArray(),
       shipmentBatches: await db.shipmentBatches.toArray(),
       supplies: await db.supplies.toArray(),
@@ -183,6 +272,7 @@ export function Configuracion() {
     if (data.accounts) { await db.accounts.clear(); await db.accounts.bulkAdd(data.accounts) }
     if (data.movements) { await db.movements.clear(); await db.movements.bulkAdd(data.movements) }
     if (data.products) { await db.products.clear(); await db.products.bulkAdd(data.products) }
+    if (data.categories) { await db.categories.clear(); await db.categories.bulkAdd(data.categories) }
     if (data.stockEntries) { await db.stockEntries.clear(); await db.stockEntries.bulkAdd(data.stockEntries) }
     if (data.shipmentBatches) { await db.shipmentBatches.clear(); await db.shipmentBatches.bulkAdd(data.shipmentBatches) }
     if (data.supplies) { await db.supplies.clear(); await db.supplies.bulkAdd(data.supplies) }
@@ -402,6 +492,173 @@ export function Configuracion() {
           </CardBody>
         </Card>
 
+        {/* Categorías dinámicas */}
+        <div className="lg:col-span-2">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                  <Tags size={16} className="text-violet-600" />
+                  Categorías de productos
+                </h3>
+                <Button size="sm" icon={<Plus size={13} />} onClick={openNewCat}>
+                  Nueva categoría
+                </Button>
+              </div>
+            </CardHeader>
+            <CardBody className="space-y-4">
+              <p className="text-sm text-gray-500">
+                Administrá las etiquetas que asignás a los productos (género, estilo, colección…).
+                Los cambios se reflejan en Inventario, Catálogo y filtros de toda la app.
+              </p>
+
+              {/* Formulario crear / editar */}
+              {showCatForm && (
+                <div className="bg-violet-50 border border-violet-100 rounded-xl p-4 space-y-3">
+                  <p className="text-sm font-semibold text-violet-800">
+                    {editingCat ? `Editar categoría '${editingCat}'` : 'Nueva categoría'}
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                        Slug / ID{!editingCat && <span className="text-gray-400 font-normal ml-1">(no cambia después)</span>}
+                      </label>
+                      <input
+                        type="text"
+                        value={catForm.id}
+                        disabled={!!editingCat}
+                        onChange={e => setCatForm(f => ({ ...f, id: e.target.value }))}
+                        placeholder="masculino"
+                        className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm font-mono disabled:bg-gray-100 disabled:text-gray-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Nombre visible</label>
+                      <input
+                        type="text"
+                        value={catForm.name}
+                        onChange={e => setCatForm(f => ({ ...f, name: e.target.value }))}
+                        placeholder="Masculino"
+                        className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Tipo</label>
+                      <select
+                        value={catForm.type}
+                        onChange={e => setCatForm(f => ({ ...f, type: e.target.value as CategoryType }))}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm"
+                      >
+                        <option value="gender">Género (Masculino, Femenino…)</option>
+                        <option value="olfactive">Olfativo (Floral, Amaderado…)</option>
+                        <option value="style">Estilo (Casual, Formal…)</option>
+                        <option value="other">Otro</option>
+                      </select>
+                    </div>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Emoji (opcional)</label>
+                        <input
+                          type="text"
+                          value={catForm.emoji}
+                          onChange={e => setCatForm(f => ({ ...f, emoji: e.target.value }))}
+                          placeholder="♂"
+                          className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm"
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Color hex (opcional)</label>
+                        <div className="flex gap-1">
+                          <input
+                            type="color"
+                            value={catForm.color || '#6d28d9'}
+                            onChange={e => setCatForm(f => ({ ...f, color: e.target.value }))}
+                            className="w-9 h-9 border border-gray-200 rounded-lg cursor-pointer p-0.5"
+                          />
+                          <input
+                            type="text"
+                            value={catForm.color}
+                            onChange={e => setCatForm(f => ({ ...f, color: e.target.value }))}
+                            placeholder="#6d28d9"
+                            className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  {catError && <p className="text-sm text-red-500">{catError}</p>}
+                  <div className="flex gap-2 justify-end">
+                    <Button variant="secondary" size="sm" onClick={() => { setShowCatForm(false); setCatError('') }}>
+                      Cancelar
+                    </Button>
+                    <Button size="sm" icon={<Save size={13} />} onClick={handleSaveCat}>
+                      {editingCat ? 'Guardar cambios' : 'Crear categoría'}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Lista de categorías agrupadas por tipo */}
+              {categories.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-4">No hay categorías. Creá la primera arriba.</p>
+              ) : (
+                <div className="space-y-4">
+                  {(['gender', 'olfactive', 'style', 'other'] as CategoryType[]).map(type => {
+                    const group = categories.filter(c => c.type === type)
+                    if (group.length === 0) return null
+                    const typeLabel: Record<CategoryType, string> = {
+                      gender: 'Género', olfactive: 'Olfativo', style: 'Estilo', other: 'Otro'
+                    }
+                    return (
+                      <div key={type}>
+                        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+                          {typeLabel[type]}
+                        </p>
+                        <div className="space-y-1">
+                          {group.map(cat => (
+                            <div
+                              key={cat.id}
+                              className="flex items-center gap-3 px-3 py-2 bg-white border border-gray-100 rounded-lg hover:border-gray-200 transition-colors"
+                            >
+                              <GripVertical size={14} className="text-gray-300 flex-shrink-0" />
+                              <span className="text-base leading-none w-6 text-center">{cat.emoji ?? '·'}</span>
+                              <div
+                                className="w-3 h-3 rounded-full flex-shrink-0"
+                                style={{ backgroundColor: cat.color ?? '#6b7280' }}
+                              />
+                              <span className="flex-1 text-sm font-medium text-gray-800">{cat.name}</span>
+                              <span className="text-xs font-mono text-gray-400">{cat.id}</span>
+                              <button
+                                onClick={() => openEditCat(cat)}
+                                className="p-1.5 hover:bg-violet-50 rounded-lg transition-colors"
+                                title="Editar"
+                              >
+                                <Pencil size={13} className="text-gray-400 hover:text-violet-600" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteCat(cat.id)}
+                                className="p-1.5 hover:bg-red-50 rounded-lg transition-colors"
+                                title="Eliminar"
+                              >
+                                <Trash2 size={13} className="text-gray-400 hover:text-red-500" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              <div className="bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 text-xs text-amber-700">
+                <strong>Nota:</strong> El <em>slug</em> (ID) de cada categoría no se puede cambiar — es el identificador
+                que los productos guardan en su lista. Para cambiar solo el nombre o emoji, usá el lápiz de edición.
+              </div>
+            </CardBody>
+          </Card>
+        </div>
+
         {/* Publicación del catálogo — GitHub Pages */}
         <div className="lg:col-span-2">
           <Card>
@@ -467,11 +724,11 @@ export function Configuracion() {
           <CardBody className="space-y-2 text-sm">
             <div className="flex justify-between py-1.5 border-b border-gray-50">
               <span className="text-gray-500">Versión</span>
-              <span className="font-medium text-gray-900">2.0 — Fase 2</span>
+              <span className="font-medium text-gray-900">2.6 — Categorías dinámicas</span>
             </div>
             <div className="flex justify-between py-1.5 border-b border-gray-50">
               <span className="text-gray-500">Schema DB</span>
-              <span className="font-medium text-gray-900">v5</span>
+              <span className="font-medium text-gray-900">v7</span>
             </div>
             <div className="flex justify-between py-1.5 border-b border-gray-50">
               <span className="text-gray-500">Almacenamiento</span>

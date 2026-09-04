@@ -41,9 +41,45 @@ export interface Movement {
 
 export type ProductType = 'sealed' | 'tester' | 'decant_source'
 
-// TODO(PROVISIONAL-CATEGORY): Opción A — campo `category` para distinguir tipos de producto
+// ─── Sistema de categorías dinámicas ─────────────────────────────────────────
+//
+// DISEÑO: las categorías son administradas por el usuario en Configuración.
+// Se almacenan en la tabla `categories` de Dexie con IDs de tipo slug string
+// (ej. 'masculino', 'femenino', 'floral') en lugar de autoincrement numérico.
+//
+// RAZÓN DEL SLUG: los slugs son identifcadores estables y legibles que migran
+// a SQL sin transformación. En la BD relacional, el slug se convierte en
+// PRIMARY KEY o columna UNIQUE — sin necesidad de remapear IDs.
+//
+// MIGRACIÓN FUTURA (Fase 6):
+//   categories → tabla SQL `categories` (slug PRIMARY KEY)
+//   product.categoryIds[] → tabla junction SQL `product_categories`
+//     (product_id INT, category_slug VARCHAR — sin transformación de datos)
+//
+// Dexie usa MultiEntry index (*categoryIds) para queries eficientes sobre arrays:
+//   db.products.where('categoryIds').equals('masculino').toArray()
+// En SQL esto equivale a un JOIN sobre `product_categories`.
+
+export type CategoryType =
+  | 'gender'     // Masculino, Femenino, Unisex, Niños
+  | 'olfactive'  // Floral, Amaderado, Oriental... (complementa olfactiveFamily provisional)
+  | 'style'      // Casual, Formal, Deportivo, Para regalo...
+  | 'other'      // Cualquier otra agrupación definida por el usuario
+
+export interface Category {
+  id: string           // slug único: 'masculino', 'femenino', 'floral', 'verano'
+  name: string         // display: 'Masculino', 'Femenino', 'Floral', 'Verano'
+  type: CategoryType   // agrupa categorías en la UI y en SQL
+  emoji?: string       // ícono opcional para pills: '♂', '♀', '🌸'
+  color?: string       // color hex para el badge: '#6d28d9' (opcional, usa default si undefined)
+  sortOrder: number    // orden dentro del grupo
+  createdAt: string
+}
+
+// TODO(PROVISIONAL-CATEGORY): Opción A — campo `category` para distinguir el TIPO de objeto
 // (fragrancias, relojes, general). PROVISIONAL hasta migración a base de datos relacional (Fase 6).
-// En la fase relacional cada categoría tendrá su propia tabla con campos específicos.
+// En Fase 6 se reemplaza por una Category de tipo 'product_kind' administrada dinámicamente.
+// Ver: https://github.com/josediaz33/PerfumeriaERP — MIGRACIÓN FASE 6
 export type ProductCategory = 'fragrance' | 'watch' | 'general'
 
 export type Concentration = 'EDP' | 'EDT' | 'EDC' | 'EXP' | 'PARFUM' | 'OTHER'
@@ -63,11 +99,27 @@ export interface Product {
   id?: number
   name: string
   brand: string
+
+  // ── Clasificación dinámica (sistema de categorías v2.6) ──────────────────
+  // categoryIds almacena slugs de Category. Es el sistema principal de
+  // clasificación: género, estilo, colección, etc.
+  // MultiEntry index en Dexie (*categoryIds) → tabla junction en SQL (Fase 6).
+  categoryIds?: string[]   // ej. ['masculino', 'floral', 'verano']
+
+  // ── Clasificación de tipo de objeto (provisional) ────────────────────────
+  // TODO(PROVISIONAL-CATEGORY): en Fase 6 este campo pasa a ser una Category
+  // de tipo 'product_kind', administrada desde Configuración como el resto.
+  // Mientras tanto, undefined = 'fragrance' por retrocompatibilidad.
+  category?: ProductCategory
+
+  // ── Atributos específicos de fragancias (provisionales) ──────────────────
   // TODO(PROVISIONAL-CATEGORY): en Fase 6 estos campos pasan a tabla 'fragrances'
-  category?: ProductCategory   // undefined = 'fragrance' por retrocompatibilidad
+  // relacionada por product_id. Se mantienen aquí para no romper el flujo actual.
   olfactiveFamily?: OlfactiveFamily  // solo fragancias
   concentration?: Concentration      // solo fragancias
-  sizeML?: number                    // solo fragancias (ml de la botella)
+  sizeML?: number                    // solo fragancias (ml de la botella fuente)
+
+  // ── Precios ──────────────────────────────────────────────────────────────
   costUSD: number
   exchangeRateUsed: number
   costPYG: number
@@ -76,9 +128,13 @@ export interface Product {
   price5ML?: number
   price10ML?: number
   price30ML?: number
+
+  // ── Stock ─────────────────────────────────────────────────────────────────
   stockSealed: number
   stockOpenML: number
   minStock: number
+
+  // ── Meta ──────────────────────────────────────────────────────────────────
   type: ProductType
   imageIds?: string[]
   catalogVisible?: boolean

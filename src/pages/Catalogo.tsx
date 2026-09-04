@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { Search, Download, FileCode, X, Globe, Copy, Check, SlidersHorizontal, Eye, EyeOff } from 'lucide-react'
 import { db, getConfig } from '../db/db'
@@ -6,6 +6,7 @@ import type { Product, OlfactiveFamily } from '../db/types'
 import { fmtPYG } from '../lib/format'
 import { blobToBase64 } from '../lib/images'
 import { Button } from '../components/ui/Button'
+import { CategoryBadge } from '../components/ui/CategoryBadge'
 
 const families: { value: OlfactiveFamily; label: string }[] = [
   { value: 'floral', label: 'Floral' }, { value: 'woody', label: 'Amaderado' },
@@ -169,9 +170,11 @@ function ProductModal({ product, onClose }: { product: Product; onClose: () => v
 export function Catalogo() {
   const products = useLiveQuery(() => db.products.toArray()) ?? []
   const decantBatches = useLiveQuery(() => db.decantBatches.toArray()) ?? []
+  const allCategories = useLiveQuery(() => db.categories.orderBy('sortOrder').toArray()) ?? []
   const [search, setSearch] = useState('')
   const [filterType, setFilterType] = useState<'all' | 'sealed' | 'decant'>('all')
   const [filterFamily, setFilterFamily] = useState<string>('all')
+  const [filterCatSlug, setFilterCatSlug] = useState<string>('all')
   const [minPrice, setMinPrice] = useState('')
   const [maxPrice, setMaxPrice] = useState('')
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
@@ -198,11 +201,15 @@ export function Catalogo() {
     if (filterType === 'sealed' && p.type !== 'sealed') return false
     if (filterType === 'decant' && p.type !== 'decant_source') return false
     if (filterFamily !== 'all' && p.olfactiveFamily !== filterFamily) return false
+    if (filterCatSlug !== 'all' && !(p.categoryIds ?? []).includes(filterCatSlug)) return false
     if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.brand.toLowerCase().includes(search.toLowerCase())) return false
     if (minPrice && p.sellingPricePYG < parseInt(minPrice)) return false
     if (maxPrice && p.sellingPricePYG > parseInt(maxPrice)) return false
     return true
   })
+
+  // Mapa slug → Category para resolución rápida en las cards
+  const catMap = useMemo(() => new Map(allCategories.map(c => [c.id, c])), [allCategories])
 
   // Toggle visibilidad en catálogo:
   // - Sin stock, no forzado (undefined) → true (forzar visible)
@@ -946,6 +953,27 @@ footer b{color:#8b6a3e;font-weight:600}
               {f.label}
             </button>
           ))}
+          {/* Filtro por categorías dinámicas (v2.6) */}
+          {allCategories.length > 0 && (
+            <>
+              <div className="w-px bg-gray-100 self-stretch mx-1 shrink-0" />
+              {allCategories.map(cat => (
+                <button
+                  key={cat.id}
+                  onClick={() => setFilterCatSlug(prev => prev === cat.id ? 'all' : cat.id)}
+                  className={`flex-none px-3 py-1.5 rounded-full text-xs font-medium transition-all whitespace-nowrap cursor-pointer border ${
+                    filterCatSlug === cat.id ? 'text-white' : 'hover:opacity-80'
+                  }`}
+                  style={filterCatSlug === cat.id
+                    ? { backgroundColor: cat.color ?? '#6d28d9', borderColor: cat.color ?? '#6d28d9', color: '#fff' }
+                    : { backgroundColor: (cat.color ?? '#6d28d9') + '15', borderColor: (cat.color ?? '#6d28d9') + '40', color: cat.color ?? '#6d28d9' }
+                  }
+                >
+                  {cat.emoji ? `${cat.emoji} ` : ''}{cat.name}
+                </button>
+              ))}
+            </>
+          )}
         </div>
 
         {/* Panel filtros avanzados */}
@@ -1068,6 +1096,15 @@ footer b{color:#8b6a3e;font-weight:600}
                   <p className={`text-sm font-semibold leading-snug mt-0.5 line-clamp-2 transition-colors ${!hasStock && !isForced ? 'text-gray-400' : 'text-gray-900 group-hover:text-violet-700'}`}>
                     {p.name}
                   </p>
+                  {/* Badges de categorías dinámicas */}
+                  {p.categoryIds && p.categoryIds.length > 0 && (
+                    <div className="flex flex-wrap gap-0.5 mt-1.5">
+                      {p.categoryIds.slice(0, 3).map(slug => {
+                        const cat = catMap.get(slug)
+                        return cat ? <CategoryBadge key={slug} category={cat} size="sm" /> : null
+                      })}
+                    </div>
+                  )}
                   <div className="mt-2">
                     {p.type === 'sealed' || p.type === 'tester' ? (
                       p.sellingPricePYG > 0

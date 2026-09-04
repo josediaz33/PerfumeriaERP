@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Layout } from './components/layout/Layout'
 import { LockScreen } from './components/layout/LockScreen'
-import { seedInitialData, getConfig } from './db/db'
+import { seedInitialData, seedCategories, getConfig } from './db/db'
 
 import { Dashboard } from './pages/Dashboard'
 import { Cuentas } from './pages/Cuentas'
@@ -25,6 +25,7 @@ export default function App() {
 
   useEffect(() => {
     seedInitialData()
+    seedCategories()  // seed categorías de género al primer arranque / upgrade a v7
     getConfig('pin_code').then(pin => {
       if (!pin) {
         setPinState('unlocked')
