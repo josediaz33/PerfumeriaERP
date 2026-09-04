@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { Search, Download, FileCode, X, Globe, Copy, Check, SlidersHorizontal, Eye, EyeOff } from 'lucide-react'
 import { db, getConfig } from '../db/db'
@@ -183,6 +183,7 @@ export function Catalogo() {
   const [publishError, setPublishError] = useState('')
   const [urlCopied, setUrlCopied] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
+  const [pdfGenerating, setPdfGenerating] = useState(false)
 
   // Para el export (HTML/PDF): respeta catalogVisible=true como "forzar visible sin stock"
   const catalogAvailable = products.filter(p => {
@@ -234,89 +235,271 @@ export function Catalogo() {
     await db.products.update(p.id!, { catalogVisible: next })
   }
 
-  async function exportPDF() {
-    const { default: jsPDF } = await import('jspdf')
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+  // ─── Export PDF — Catálogo visual en grilla de 3 columnas con imágenes ───────
+  //
+  // Diseño: header oscuro (logo + nombre + subtítulo/filtro) → grilla 3×N de cards
+  // con imagen del producto, marca, nombre, tipo y precio → footer paginado.
+  //
+  // Layout A4 (210×297mm):
+  //   - HEADER_H = 38mm (mismo estilo que el HTML exportado)
+  //   - COLS = 3, CARD_W = 60mm, GAP = 3mm, LEFT_MARGIN = 12mm
+  //   - IMG_H = 52mm (caja portrait), TEXT_H = 22mm → CARD_H = 74mm
+  //   - ROWS_PER_PAGE = 3 → 9 productos por página
 
-    const logoImg = await db.images.get('business-logo')
-    const logoB64 = logoImg ? await blobToBase64(logoImg.blob) : null
-    const logoFmt = logoImg?.mime === 'image/png' ? 'PNG' : 'JPEG'
-    const configName = await db.config.where('key').equals('business_name').first()
-    const businessName = configName?.value || 'JODA Parfums'
-    const configPhone = await db.config.where('key').equals('business_phone').first()
+  const exportPDF = useCallback(async () => {
+    if (pdfGenerating || filtered.length === 0) return
+    setPdfGenerating(true)
+    try {
+      const { default: jsPDF } = await import('jspdf')
 
-    doc.setFillColor(20, 18, 18)
-    doc.rect(0, 0, 210, 38, 'F')
-    if (logoB64) {
-      doc.addImage(logoB64, logoFmt, 10, 4, 30, 30)
-      doc.setTextColor(200, 169, 110)
-      doc.setFontSize(9)
-      doc.setFont('helvetica', 'normal')
-      doc.setTextColor(160, 130, 80)
-      doc.text('Catálogo de Fragancias', 44, 22)
-      if (configPhone?.value) doc.text(configPhone.value, 44, 30)
-    } else {
-      doc.setTextColor(200, 169, 110)
-      doc.setFontSize(20)
-      doc.setFont('helvetica', 'bold')
-      doc.text(businessName, 14, 18)
-      doc.setFontSize(9)
-      doc.setFont('helvetica', 'normal')
-      doc.setTextColor(160, 130, 80)
-      doc.text('Catálogo de Fragancias', 14, 26)
-      if (configPhone?.value) doc.text(configPhone.value, 14, 33)
+      // ── Assets y config ────────────────────────────────────────────────────
+      const logoImg  = await db.images.get('business-logo')
+      const logoB64  = logoImg ? await blobToBase64(logoImg.blob) : null
+      const logoFmt  = logoImg?.mime === 'image/png' ? 'PNG' : 'JPEG'
+      const businessName = (await db.config.where('key').equals('business_name').first())?.value || 'JODA Parfums'
+      const businessPhone = (await db.config.where('key').equals('business_phone').first())?.value || ''
+
+      // Label descriptivo del filtro activo (si hay)
+      const filterParts: string[] = []
+      if (filterCatSlug !== 'all') {
+        const cat = allCategories.find(c => c.id === filterCatSlug)
+        if (cat) filterParts.push((cat.emoji ? cat.emoji + ' ' : '') + cat.name)
+      }
+      if (filterFamily !== 'all') {
+        const fam = families.find(f => f.value === filterFamily as OlfactiveFamily)
+        if (fam) filterParts.push(fam.label)
+      }
+      if (filterType === 'sealed') filterParts.push('Sellados')
+      else if (filterType === 'decant') filterParts.push('Para decants')
+      if (search) filterParts.push(`"${search}"`)
+      const subtitle = filterParts.length > 0 ? filterParts.join(' · ') : 'Catálogo de Fragancias'
+
+      // ── Pre-cargar imágenes de productos en paralelo ───────────────────────
+      const productImages = await Promise.all(
+        filtered.map(async p => {
+          if (!p.imageIds?.[0]) return null
+          try {
+            const img = await db.images.get(p.imageIds[0])
+            if (!img) return null
+            return { b64: await blobToBase64(img.blob), fmt: img.mime === 'image/png' ? 'PNG' : 'JPEG' }
+          } catch { return null }
+        })
+      )
+
+      // ── Constantes de layout ───────────────────────────────────────────────
+      const PAGE_W   = 210
+      const PAGE_H   = 297
+      const MARGIN_H = 12       // margen horizontal
+      const HEADER_H = 38       // alto del header oscuro
+      const FOOTER_H = 10       // alto del footer
+      const BODY_Y0  = HEADER_H + 6  // Y de inicio del grid (44mm)
+      const COLS     = 3
+      const GAP      = 3        // espacio entre cards
+      const CARD_W   = (PAGE_W - 2 * MARGIN_H - (COLS - 1) * GAP) / COLS  // 60mm
+      const IMG_H    = 52       // alto de la imagen en la card
+      const TEXT_H   = 22       // alto del bloque de texto
+      const CARD_H   = IMG_H + TEXT_H  // 74mm total
+      const ROW_GAP  = 3        // espacio entre filas
+      const AVAILABLE = PAGE_H - FOOTER_H - BODY_Y0  // mm disponibles para el grid
+      const ROWS_PER_PAGE = Math.floor((AVAILABLE + ROW_GAP) / (CARD_H + ROW_GAP))
+
+      const DATE_STR = new Date().toLocaleDateString('es-PY', { day: 'numeric', month: 'long', year: 'numeric' })
+      const totalPages = Math.ceil(Math.ceil(filtered.length / COLS) / ROWS_PER_PAGE)
+
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+
+      // ── Helpers ────────────────────────────────────────────────────────────
+
+      function drawHeader() {
+        doc.setFillColor(20, 18, 18)
+        doc.rect(0, 0, PAGE_W, HEADER_H, 'F')
+
+        if (logoB64) {
+          doc.addImage(logoB64, logoFmt, MARGIN_H, 4, 30, 30)
+          doc.setTextColor(200, 169, 110)
+          doc.setFontSize(15)
+          doc.setFont('helvetica', 'bold')
+          doc.text(businessName, 46, 18)
+          doc.setFont('helvetica', 'normal')
+          doc.setFontSize(8)
+          doc.setTextColor(160, 130, 80)
+          doc.text(subtitle, 46, 26)
+          if (businessPhone) doc.text(businessPhone, 46, 32)
+        } else {
+          doc.setTextColor(200, 169, 110)
+          doc.setFontSize(18)
+          doc.setFont('helvetica', 'bold')
+          doc.text(businessName, MARGIN_H, 20)
+          doc.setFont('helvetica', 'normal')
+          doc.setFontSize(8)
+          doc.setTextColor(160, 130, 80)
+          doc.text(subtitle, MARGIN_H, 28)
+          if (businessPhone) doc.text(businessPhone, MARGIN_H, 34)
+        }
+        doc.setTextColor(160, 130, 80)
+        doc.setFontSize(7.5)
+        doc.text(DATE_STR, PAGE_W - MARGIN_H, 33, { align: 'right' })
+      }
+
+      function drawFooter(pageNum: number) {
+        doc.setDrawColor(200, 185, 155)
+        doc.setLineWidth(0.25)
+        doc.line(MARGIN_H, PAGE_H - FOOTER_H + 1, PAGE_W - MARGIN_H, PAGE_H - FOOTER_H + 1)
+        doc.setFont('helvetica', 'normal')
+        doc.setFontSize(6.5)
+        doc.setTextColor(150, 130, 90)
+        doc.text(businessName, MARGIN_H, PAGE_H - 4)
+        doc.text(`${pageNum} / ${totalPages}`, PAGE_W / 2, PAGE_H - 4, { align: 'center' })
+        doc.text(`${filtered.length} producto${filtered.length !== 1 ? 's' : ''}`, PAGE_W - MARGIN_H, PAGE_H - 4, { align: 'right' })
+      }
+
+      function drawCard(
+        p: Product,
+        imgData: { b64: string; fmt: string } | null,
+        cardX: number,
+        cardY: number
+      ) {
+        const r = 2  // radio de esquinas redondeadas
+
+        // Fondo blanco de la card
+        doc.setFillColor(255, 255, 255)
+        doc.roundedRect(cardX, cardY, CARD_W, CARD_H, r, r, 'F')
+
+        // Imagen del producto
+        if (imgData) {
+          try {
+            // Obtener dimensiones reales para escalar respetando aspect ratio
+            const props = doc.getImageProperties(imgData.b64)
+            const srcAspect = props.width / props.height
+            const boxAspect = CARD_W / IMG_H
+            let iw = CARD_W, ih = IMG_H, ix = cardX, iy = cardY
+            if (srcAspect > boxAspect) {
+              // Imagen más ancha: escala por altura, centra horizontalmente
+              ih = IMG_H
+              iw = IMG_H * srcAspect
+              ix = cardX + (CARD_W - iw) / 2
+            } else {
+              // Imagen más alta: escala por ancho, alinea al top
+              iw = CARD_W
+              ih = CARD_W / srcAspect
+            }
+            doc.addImage(imgData.b64, imgData.fmt, ix, iy, iw, ih, undefined, 'FAST')
+          } catch {
+            // Si falla, placeholder
+            doc.setFillColor(238, 233, 222)
+            doc.rect(cardX, cardY, CARD_W, IMG_H, 'F')
+          }
+        } else {
+          // Placeholder sin imagen
+          doc.setFillColor(242, 238, 230)
+          doc.rect(cardX, cardY, CARD_W, IMG_H, 'F')
+          // Ícono de frasco simplificado (rects)
+          doc.setFillColor(210, 200, 182)
+          const cx = cardX + CARD_W / 2
+          doc.rect(cx - 7, cardY + IMG_H / 2 - 10, 14, 20, 'F')
+          doc.rect(cx - 4, cardY + IMG_H / 2 - 16, 8, 7, 'F')
+          doc.rect(cx - 2, cardY + IMG_H / 2 - 20, 4, 5, 'F')
+        }
+
+        // Borde del área de imagen (cubre overflow del image con el fondo de la card)
+        doc.setFillColor(255, 255, 255)
+        doc.rect(cardX, cardY + IMG_H, CARD_W, TEXT_H, 'F')  // zona de texto
+
+        // Línea separadora imagen / texto
+        doc.setDrawColor(232, 224, 210)
+        doc.setLineWidth(0.2)
+        doc.line(cardX, cardY + IMG_H, cardX + CARD_W, cardY + IMG_H)
+
+        // Borde general de la card (sobre todo)
+        doc.setDrawColor(220, 210, 192)
+        doc.setLineWidth(0.3)
+        doc.roundedRect(cardX, cardY, CARD_W, CARD_H, r, r, 'D')
+
+        // ── Texto ────────────────────────────────────────────────────────────
+        const tx = cardX + 2.5  // padding texto
+        let ty = cardY + IMG_H + 4.5
+
+        // Marca (uppercase dorado)
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(5.5)
+        doc.setTextColor(154, 120, 60)
+        doc.text(p.brand.toUpperCase().slice(0, 22), tx, ty)
+        ty += 4.5
+
+        // Nombre del producto (bold, dark, hasta 2 líneas)
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(7.5)
+        doc.setTextColor(20, 18, 18)
+        const nameLines = doc.splitTextToSize(p.name, CARD_W - 5) as string[]
+        const displayLines = nameLines.slice(0, 2)
+        doc.text(displayLines, tx, ty)
+        ty += displayLines.length * 4.2
+
+        // Info (tipo · tamaño)
+        doc.setFont('helvetica', 'normal')
+        doc.setFontSize(6)
+        doc.setTextColor(120, 110, 90)
+        const pCat = p.category ?? 'fragrance'
+        let meta = p.type === 'sealed' ? 'Sellado' : p.type === 'tester' ? 'Tester' : 'Decant'
+        if (pCat === 'fragrance' && p.sizeML) meta += ` · ${p.sizeML}ml`
+        if (pCat === 'fragrance' && p.concentration) meta += ` · ${p.concentration}`
+        if (pCat === 'watch') meta = 'Reloj'
+        doc.text(meta.slice(0, 26), tx, ty)
+        ty += 4.5
+
+        // Precio (bold, dark)
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(8)
+        doc.setTextColor(20, 18, 18)
+        let price = ''
+        if (p.type === 'sealed' || p.type === 'tester') {
+          price = p.sellingPricePYG > 0 ? `Gs. ${p.sellingPricePYG.toLocaleString('es-PY')}` : 'Consultar'
+        } else {
+          const batches = decantBatches.filter(b => b.productId === p.id && b.sellingPricePYG > 0)
+          if (batches.length > 0) {
+            const min = batches.reduce((a, b) => a.sellingPricePYG < b.sellingPricePYG ? a : b)
+            price = `desde ${min.sizeML}ml: Gs. ${min.sellingPricePYG.toLocaleString('es-PY')}`
+          } else {
+            price = 'Consultar'
+          }
+        }
+        doc.text(price.slice(0, 30), tx, ty)
+      }
+
+      // ── Generación de páginas ──────────────────────────────────────────────
+      let pageNum  = 1
+      let col      = 0
+      let row      = 0
+      drawHeader()
+
+      for (let i = 0; i < filtered.length; i++) {
+        // ¿Hay que empezar una nueva página?
+        if (row >= ROWS_PER_PAGE) {
+          drawFooter(pageNum)
+          doc.addPage()
+          pageNum++
+          col = 0
+          row = 0
+          drawHeader()
+        }
+
+        const cardX = MARGIN_H + col * (CARD_W + GAP)
+        const cardY = BODY_Y0  + row * (CARD_H + ROW_GAP)
+        drawCard(filtered[i], productImages[i], cardX, cardY)
+
+        col++
+        if (col >= COLS) { col = 0; row++ }
+      }
+      drawFooter(pageNum)
+
+      // ── Abrir en nueva pestaña ─────────────────────────────────────────────
+      const url = doc.output('bloburi')
+      window.open(url, '_blank')
+
+    } finally {
+      setPdfGenerating(false)
     }
-    doc.setTextColor(160, 130, 80)
-    doc.setFontSize(8)
-    doc.text(new Date().toLocaleDateString('es-PY'), 196, 33, { align: 'right' })
-
-    let y = 50
-    doc.setFillColor(20, 18, 18)
-    doc.rect(14, y, 182, 8, 'F')
-    doc.setTextColor(200, 169, 110)
-    doc.setFontSize(9)
-    doc.setFont('helvetica', 'bold')
-    doc.text('Perfume', 16, y + 5.5)
-    doc.text('Marca', 80, y + 5.5)
-    doc.text('Tipo', 128, y + 5.5)
-    doc.text('Precio', 162, y + 5.5)
-    y += 12
-
-    doc.setFont('helvetica', 'normal')
-    doc.setTextColor(30, 27, 46)
-
-    filtered.forEach((p, i) => {
-      if (y > 265) { doc.addPage(); y = 20 }
-      if (i % 2 === 1) {
-        doc.setFillColor(248, 246, 240)
-        doc.rect(14, y - 2, 182, 9, 'F')
-      }
-      const batches = decantBatches.filter(b => b.productId === p.id)
-      const sizes = [...new Set(batches.map(b => b.sizeML))].sort((a, b) => a - b)
-      doc.text(p.name.slice(0, 34), 16, y + 4)
-      doc.text(p.brand.slice(0, 20), 80, y + 4)
-      doc.text(p.type === 'sealed' ? 'Sellado' : 'Decants', 128, y + 4)
-      if (p.type === 'sealed') {
-        doc.text(p.sellingPricePYG > 0 ? `Gs. ${p.sellingPricePYG.toLocaleString('es-PY')}` : '—', 155, y + 4)
-      } else if (sizes.length > 0) {
-        const first = batches.find(b => b.sizeML === sizes[0])
-        doc.text(first?.sellingPricePYG ? `${sizes[0]}ml: Gs. ${first.sellingPricePYG.toLocaleString('es-PY')}` : '—', 155, y + 4)
-      } else {
-        doc.text('Consultar', 155, y + 4)
-      }
-      y += 9
-    })
-
-    doc.setDrawColor(154, 123, 63)
-    doc.setLineWidth(0.5)
-    doc.line(14, y + 4, 196, y + 4)
-    doc.setFontSize(7.5)
-    doc.setTextColor(154, 123, 63)
-    doc.text(`${filtered.length} producto${filtered.length !== 1 ? 's' : ''} · Generado ${new Date().toLocaleDateString('es-PY')}`, 105, y + 10, { align: 'center' })
-
-    const url = doc.output('bloburi')
-    window.open(url, '_blank')
-  }
+  }, [filtered, decantBatches, filterCatSlug, filterFamily, filterType, search, allCategories, pdfGenerating])
 
   // ── CATX-07/08/09: Mini portal de pedidos — HTML autocontenido, interactivo, compatible iOS ──
   // buildCatalogHTML acepta un subconjunto de productos y un label opcional.
@@ -905,7 +1088,16 @@ footer b{color:#8b6a3e;font-weight:600}
               ? `HTML (${filtered.length})`
               : 'HTML'}
           </Button>
-          <Button variant="secondary" size="sm" icon={<Download size={14} />} onClick={exportPDF}>PDF</Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Download size={14} />}
+            onClick={exportPDF}
+            disabled={pdfGenerating || filtered.length === 0}
+            title={filtered.length === 0 ? 'No hay productos para exportar' : `Exportar ${filtered.length} producto${filtered.length !== 1 ? 's' : ''} en PDF visual`}
+          >
+            {pdfGenerating ? 'Generando...' : 'PDF'}
+          </Button>
         </div>
       </div>
 
