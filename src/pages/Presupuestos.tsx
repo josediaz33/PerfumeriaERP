@@ -166,7 +166,15 @@ export function Presupuestos() {
   function handleLineTypeChange(i: number, type: BudgetLineItem['type']) {
     setForm(f => ({
       ...f,
-      items: f.items.map((x, j) => j === i ? { ...x, type, productId: '0', description: '', unitPrice: '' } : x),
+      items: f.items.map((x, j) => j === i ? {
+        ...x,
+        type,
+        productId: '0',
+        description: '',
+        unitPrice: '',
+        // Parcial: input libre → empieza vacío; Decant: select fijo → default 5ml
+        sizeML: type === 'partial' ? '' : type === 'decant' ? '5' : x.sizeML,
+      } : x),
     }))
   }
 
@@ -659,7 +667,8 @@ export function Presupuestos() {
                       />
                     ) : <div className="flex-1" />}
 
-                    {(item.type === 'decant' || item.type === 'partial') && (
+                    {/* Decant: opciones fijas; Parcial: input libre de ml */}
+                    {item.type === 'decant' && (
                       <select
                         value={item.sizeML}
                         onChange={e => autoFill(i, item.productId, item.type, e.target.value)}
@@ -667,6 +676,20 @@ export function Presupuestos() {
                       >
                         {[3, 5, 10, 30].map(s => <option key={s} value={String(s)}>{s}ml</option>)}
                       </select>
+                    )}
+                    {item.type === 'partial' && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <input
+                          type="number"
+                          min="0.5"
+                          step="0.5"
+                          value={item.sizeML}
+                          onChange={e => autoFill(i, item.productId, item.type, e.target.value)}
+                          className="w-16 text-sm border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white text-center"
+                          placeholder="ml"
+                        />
+                        <span className="text-xs text-gray-400">ml</span>
+                      </div>
                     )}
 
                     <button

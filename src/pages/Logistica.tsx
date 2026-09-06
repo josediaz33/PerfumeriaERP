@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { Plus, MapPin, Package, Check, Clock, Truck, X as XIcon, Edit2, Trash2, AlertTriangle } from 'lucide-react'
@@ -27,9 +27,13 @@ const statusIcons: Record<LocalOrderStatus, typeof Clock> = {
 
 const statusFlow: LocalOrderStatus[] = ['pending', 'preparing', 'ready', 'delivered']
 
-function findSupplyForSize(supplyList: Supply[], sizeML: number): Supply | undefined {
-  return supplyList.find(s => s.sizeML === sizeML)
-    ?? supplyList.find(s => (s.type as string) === `${sizeML}ml`)
+// Encuentra el insumo para un tamaño dado, prefiriendo el que tenga stock suficiente.
+// Si hay varios insumos del mismo sizeML (ej: premium y normal), elige el primero con stock >= needed.
+// Eso evita bloquear el flujo cuando un tipo se agotó pero otro del mismo tamaño tiene stock.
+function findSupplyForSize(supplyList: Supply[], sizeML: number, needed = 1): Supply | undefined {
+  const matching = supplyList.filter(s => s.sizeML === sizeML || (s.type as string) === `${sizeML}ml`)
+  // Primero intentar uno con stock suficiente
+  return matching.find(s => s.stock >= needed) ?? matching[0]
 }
 
 export function Logistica() {
@@ -77,6 +81,29 @@ export function Logistica() {
 
   const filtered = orders.filter(o => filterStatus === 'all' || o.status === filterStatus)
 
+  // Mapa sizeML → lista de insumos. Permite detectar cuando hay múltiples del mismo tamaño.
+  const suppliesBySizeML = useMemo(() => {
+    const map = new Map<number, Supply[]>()
+    for (const s of supplies) {
+      if (s.sizeML) {
+        const list = map.get(s.sizeML) ?? []
+        list.push(s)
+        map.set(s.sizeML, list)
+      }
+    }
+    return map
+  }, [supplies])
+
+  // Devuelve el id (string) del insumo con más stock para un sizeML dado.
+  // Si solo hay uno, lo devuelve siempre. Si no hay ninguno, devuelve ''.
+  function bestSupplyId(sizeML: number | string, qty: number | string = 1): string {
+    const size = typeof sizeML === 'string' ? parseInt(sizeML) : sizeML
+    const needed = typeof qty === 'string' ? parseInt(qty) || 1 : qty
+    const opts = suppliesBySizeML.get(size) ?? []
+    const best = opts.find(s => s.stock >= needed) ?? opts[0]
+    return best?.id !== undefined ? String(best.id) : ''
+  }
+
   const pending = orders.filter(o => o.status === 'pending').length
   const preparing = orders.filter(o => o.status === 'preparing').length
   const ready = orders.filter(o => o.status === 'ready').length
@@ -122,11 +149,14 @@ export function Logistica() {
         if (product.stockOpenML < mlNeeded) {
           errors.push(`${product.brand} — ${product.name}: ML insuficientes (${product.stockOpenML}ml disponibles, se necesitan ${mlNeeded}ml)`)
         }
-        const supply = findSupplyForSize(supplies, item.sizeML)
+        // Si el pedido tiene un frasco comprometido, validar ese específicamente
+        const supply = item.supplyId
+          ? supplies.find(s => s.id === item.supplyId)
+          : findSupplyForSize(supplies, item.sizeML, item.quantity)
         if (!supply) {
           errors.push(`No hay frasco registrado para decants de ${item.sizeML}ml`)
         } else if (supply.stock < item.quantity) {
-          errors.push(`Frascos ${item.sizeML}ml: stock insuficiente (${supply.stock} disponibles, se necesitan ${item.quantity})`)
+          errors.push(`Frascos ${item.sizeML}ml: stock insuficiente (${supply.stock} disponibles en "${supply.name}", se necesitan ${item.quantity})`)
         }
       } else if (item.type === 'partial' && item.sizeML) {
         const mlNeeded = item.quantity * item.sizeML
@@ -151,11 +181,14 @@ export function Logistica() {
       if (item.type === 'decant') {
         const sizeML = parseInt(item.sizeML)
         const qty = parseInt(item.quantity) || 1
-        const supply = findSupplyForSize(supplies, sizeML)
+        // Usar el frasco comprometido si el usuario lo eligió, o el mejor disponible
+        const supply = item.supplyId
+          ? supplies.find(s => String(s.id) === item.supplyId)
+          : findSupplyForSize(supplies, sizeML, qty)
         if (!supply) {
           errors.push(`No hay insumo registrado para frascos de ${sizeML}ml`)
         } else if (supply.stock < qty) {
-          errors.push(`Frascos ${sizeML}ml: stock insuficiente (${supply.stock} disponibles, se necesitan ${qty})`)
+          errors.push(`Frascos ${sizeML}ml: stock insuficiente (${supply.stock} disponibles en "${supply.name}", se necesitan ${qty})`)
         }
       }
     }
@@ -186,7 +219,8 @@ export function Logistica() {
       customerName: form.customerName, customerPhone: form.customerPhone, customerAddress: form.customerAddress,
       items: validItems.map(i => ({
         productId: parseInt(i.productId), type: i.type,
-        supplyId: i.type === 'supply' && i.supplyId ? parseInt(i.supplyId) : undefined,
+        // Guardar supplyId para items de tipo supply Y decant (permite saber qué frasco usar al preparar y anular)
+        supplyId: ((i.type === 'supply' || i.type === 'decant') && i.supplyId) ? parseInt(i.supplyId) : undefined,
         sizeML: (i.type === 'decant' || i.type === 'partial') ? parseInt(i.sizeML) : undefined,
         quantity: parseInt(i.quantity), unitPrice: parseFloat(i.unitPrice),
       })),
@@ -308,7 +342,10 @@ export function Logistica() {
               await db.stockEntries.update(lot.id!, { quantityRemaining: lot.quantityRemaining! + restore })
               left -= restore
             }
-            const supply = await db.supplies.where('sizeML').equals(item.sizeML).first()
+            // Restaurar al frasco específico que se usó (guardado en item.supplyId); fallback a sizeML
+            const supply = item.supplyId
+              ? await db.supplies.get(item.supplyId)
+              : await db.supplies.where('sizeML').equals(item.sizeML).first()
             if (supply?.id) await db.supplies.update(supply.id, { stock: supply.stock + item.quantity, updatedAt: now })
           } else if (item.type === 'partial' && item.sizeML) {
             const mlToRestore = item.quantity * item.sizeML
@@ -411,8 +448,17 @@ export function Logistica() {
               await db.stockEntries.update(lot.id!, { quantityRemaining: avail - deduct })
               mlLeft -= deduct
             }
-            let supply = await db.supplies.where('sizeML').equals(sizeML).first()
-            if (!supply) supply = await db.supplies.filter(s => (s.type as string) === `${sizeML}ml`).first()
+            // Usar el frasco comprometido en el pedido; si no hay supplyId, tomar el de más stock
+            let supply = item.supplyId
+              ? await db.supplies.get(item.supplyId)
+              : undefined
+            if (!supply) {
+              const allMatchingSupplies = await db.supplies.where('sizeML').equals(sizeML).toArray()
+              const allMatchingByType = allMatchingSupplies.length > 0
+                ? allMatchingSupplies
+                : await db.supplies.filter(s => (s.type as string) === `${sizeML}ml`).toArray()
+              supply = allMatchingByType.find(s => s.stock >= item.quantity) ?? allMatchingByType[0]
+            }
             if (supply?.id) await db.supplies.update(supply.id, { stock: Math.max(0, supply.stock - item.quantity), updatedAt: now })
             const cpm = product.type === 'decant_source' ? product.costPYG : product.costPYG / product.sizeML
             await db.decantBatches.add({
@@ -785,15 +831,47 @@ export function Logistica() {
                       className="flex-1"
                     />
                   )}
-                  <Select value={item.type} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, type: e.target.value as any, productId: '0', supplyId: '' } : x) }))}
+                  <Select value={item.type} onChange={e => {
+                    const newType = e.target.value as typeof item.type
+                    // Al cambiar a decant, pre-seleccionar el frasco con más stock para el sizeML actual
+                    const autoSupply = newType === 'decant' ? bestSupplyId(item.sizeML, item.quantity) : ''
+                    setForm(f => ({ ...f, items: f.items.map((x, j) => j === i
+                      ? { ...x, type: newType, productId: '0', supplyId: autoSupply }
+                      : x) }))
+                  }}
                     options={[{ value: 'sealed', label: 'Sellado' }, { value: 'tester', label: 'Tester' }, { value: 'decant', label: 'Decant' }, { value: 'partial', label: 'Parcial' }, { value: 'supply', label: 'Insumo' }]} />
                   {item.type === 'decant' && (
-                    <Select value={item.sizeML} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, sizeML: e.target.value } : x) }))}
+                    <Select value={item.sizeML} onChange={e => {
+                      // Al cambiar el tamaño, auto-seleccionar el frasco con más stock para ese tamaño
+                      const autoSupply = bestSupplyId(e.target.value, item.quantity)
+                      setForm(f => ({ ...f, items: f.items.map((x, j) => j === i
+                        ? { ...x, sizeML: e.target.value, supplyId: autoSupply }
+                        : x) }))
+                    }}
                       options={[3, 5, 10, 30].map(s => ({ value: String(s), label: `${s}ml` }))} />
                   )}
                   {item.type === 'partial' && (
                     <Input placeholder="ML a vender" type="number" value={item.sizeML} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, sizeML: e.target.value } : x) }))} />
                   )}
+                  {/* Selector de frasco: solo visible cuando hay 2+ insumos del mismo tamaño */}
+                  {item.type === 'decant' && (() => {
+                    const opts = suppliesBySizeML.get(parseInt(item.sizeML)) ?? []
+                    if (opts.length <= 1) return null
+                    return (
+                      <Select
+                        value={item.supplyId}
+                        onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i
+                          ? { ...x, supplyId: e.target.value }
+                          : x) }))}
+                        options={opts.map(s => ({
+                          value: String(s.id),
+                          label: s.stock > 0
+                            ? `${s.name} (${s.stock}u.)`
+                            : `${s.name} — sin stock`,
+                        }))}
+                      />
+                    )
+                  })()}
                   <Input placeholder="Cant." type="number" value={item.quantity} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, quantity: e.target.value } : x) }))} />
                   <Input placeholder="Precio Gs." type="number" value={item.unitPrice} onChange={e => setForm(f => ({ ...f, items: f.items.map((x, j) => j === i ? { ...x, unitPrice: e.target.value } : x) }))} />
                 </div>

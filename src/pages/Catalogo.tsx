@@ -18,6 +18,31 @@ const families: { value: OlfactiveFamily; label: string }[] = [
 
 const familyLabel = (f: OlfactiveFamily) => families.find(x => x.value === f)?.label ?? f
 
+// ─── Chip de filtro activo ────────────────────────────────────────────────────
+function FilterChip({ label, onRemove, color }: { label: string; onRemove: () => void; color?: string }) {
+  const style = color
+    ? { backgroundColor: color + '18', borderColor: color + '50', color }
+    : undefined
+  return (
+    <span
+      className={`inline-flex items-center gap-1 pl-2.5 pr-1.5 py-0.5 rounded-full text-xs font-medium border ${
+        color ? '' : 'bg-violet-50 border-violet-200 text-violet-700'
+      }`}
+      style={style}
+    >
+      {label}
+      <button
+        type="button"
+        onClick={onRemove}
+        className="w-3.5 h-3.5 rounded-full flex items-center justify-center hover:opacity-70 transition-opacity"
+        aria-label="Quitar filtro"
+      >
+        ×
+      </button>
+    </span>
+  )
+}
+
 function ImagePlaceholder({ size = 56 }: { size?: number }) {
   const s = size
   return (
@@ -172,7 +197,9 @@ export function Catalogo() {
   const decantBatches = useLiveQuery(() => db.decantBatches.toArray()) ?? []
   const allCategories = useLiveQuery(() => db.categories.orderBy('sortOrder').toArray()) ?? []
   const [search, setSearch] = useState('')
-  const [filterType, setFilterType] = useState<'all' | 'sealed' | 'decant'>('all')
+  const [filterType, setFilterType] = useState<'all' | 'sealed' | 'decant' | 'tester'>('all')
+  const [filterStock, setFilterStock] = useState<'all' | 'in_stock' | 'out_stock'>('all')
+  const [filterProdCat, setFilterProdCat] = useState<'all' | 'fragrance' | 'watch' | 'general'>('all')
   const [filterFamily, setFilterFamily] = useState<string>('all')
   const [filterCatSlug, setFilterCatSlug] = useState<string>('all')
   const [minPrice, setMinPrice] = useState('')
@@ -198,9 +225,24 @@ export function Catalogo() {
   // (incluyendo sin stock) para poder togglear la visibilidad de cualquiera
   const available = products.filter(p => p.catalogVisible !== false)
 
+  // Helper: si el producto es "disponible para el catálogo"
+  // Equivalente a catalogAvailable: tiene stock O está forzado visible (catalogVisible===true).
+  // Los forzados visibles se consideran disponibles aunque el stock sea 0.
+  const pIsAvailable = (p: Product) => {
+    if (p.catalogVisible === true) return true   // forzado visible → siempre disponible
+    if (p.type === 'sealed') return p.stockSealed > 0
+    if (p.type === 'decant_source') return p.stockOpenML > 0
+    if (p.type === 'tester') return (p.stockSealed ?? 0) > 0
+    return true
+  }
+
   const filtered = available.filter(p => {
+    if (filterStock === 'in_stock' && !pIsAvailable(p)) return false
+    if (filterStock === 'out_stock' && pIsAvailable(p)) return false
+    if (filterProdCat !== 'all' && (p.category ?? 'fragrance') !== filterProdCat) return false
     if (filterType === 'sealed' && p.type !== 'sealed') return false
     if (filterType === 'decant' && p.type !== 'decant_source') return false
+    if (filterType === 'tester' && p.type !== 'tester') return false
     if (filterFamily !== 'all' && p.olfactiveFamily !== filterFamily) return false
     if (filterCatSlug !== 'all' && !(p.categoryIds ?? []).includes(filterCatSlug)) return false
     if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.brand.toLowerCase().includes(search.toLowerCase())) return false
@@ -208,6 +250,27 @@ export function Catalogo() {
     if (maxPrice && p.sellingPricePYG > parseInt(maxPrice)) return false
     return true
   })
+
+  // ¿Hay algún filtro activo? (excluyendo búsqueda de texto por estar siempre visible)
+  const isFiltered = filterStock !== 'all' || filterProdCat !== 'all' || filterType !== 'all'
+    || filterFamily !== 'all' || filterCatSlug !== 'all' || !!search || !!minPrice || !!maxPrice
+
+  // Cantidad de filtros activos para la badge del botón (texto no cuenta como "filtro estructurado")
+  const activeFilterCount = [
+    filterStock !== 'all', filterProdCat !== 'all', filterType !== 'all',
+    filterFamily !== 'all', filterCatSlug !== 'all', !!(minPrice || maxPrice),
+  ].filter(Boolean).length
+
+  function clearAllFilters() {
+    setFilterStock('all')
+    setFilterProdCat('all')
+    setFilterType('all')
+    setFilterFamily('all')
+    setFilterCatSlug('all')
+    setSearch('')
+    setMinPrice('')
+    setMaxPrice('')
+  }
 
   // Mapa slug → Category para resolución rápida en las cards
   const catMap = useMemo(() => new Map(allCategories.map(c => [c.id, c])), [allCategories])
@@ -261,6 +324,14 @@ export function Catalogo() {
 
       // Label descriptivo del filtro activo (si hay)
       const filterParts: string[] = []
+      if (filterStock === 'in_stock') filterParts.push('Disponibles')
+      else if (filterStock === 'out_stock') filterParts.push('Sin disponibilidad')
+      if (filterProdCat === 'fragrance') filterParts.push('Fragancias')
+      else if (filterProdCat === 'watch') filterParts.push('Relojes')
+      else if (filterProdCat === 'general') filterParts.push('General')
+      if (filterType === 'sealed') filterParts.push('Sellados')
+      else if (filterType === 'decant') filterParts.push('Para decants')
+      else if (filterType === 'tester') filterParts.push('Testers')
       if (filterCatSlug !== 'all') {
         const cat = allCategories.find(c => c.id === filterCatSlug)
         if (cat) filterParts.push((cat.emoji ? cat.emoji + ' ' : '') + cat.name)
@@ -269,8 +340,6 @@ export function Catalogo() {
         const fam = families.find(f => f.value === filterFamily as OlfactiveFamily)
         if (fam) filterParts.push(fam.label)
       }
-      if (filterType === 'sealed') filterParts.push('Sellados')
-      else if (filterType === 'decant') filterParts.push('Para decants')
       if (search) filterParts.push(`"${search}"`)
       const subtitle = filterParts.length > 0 ? filterParts.join(' · ') : 'Catálogo de Fragancias'
 
@@ -455,10 +524,16 @@ export function Catalogo() {
         if (p.type === 'sealed' || p.type === 'tester') {
           price = p.sellingPricePYG > 0 ? `Gs. ${p.sellingPricePYG.toLocaleString('es-PY')}` : 'Consultar'
         } else {
-          const batches = decantBatches.filter(b => b.productId === p.id && b.sellingPricePYG > 0)
-          if (batches.length > 0) {
-            const min = batches.reduce((a, b) => a.sellingPricePYG < b.sellingPricePYG ? a : b)
-            price = `desde ${min.sizeML}ml: Gs. ${min.sellingPricePYG.toLocaleString('es-PY')}`
+          // Decant: misma lógica que la vista interna — precio de los campos price3/5/10/30ML
+          const sizePrices = [
+            { sizeML: 3, price: p.price3ML ?? 0 },
+            { sizeML: 5, price: p.price5ML ?? 0 },
+            { sizeML: 10, price: p.price10ML ?? 0 },
+            { sizeML: 30, price: p.price30ML ?? 0 },
+          ].filter(s => s.price > 0)
+          if (sizePrices.length > 0) {
+            const minItem = sizePrices.reduce((a, b) => a.price < b.price ? a : b)
+            price = `desde ${minItem.sizeML}ml: Gs. ${minItem.price.toLocaleString('es-PY')}`
           } else {
             price = 'Consultar'
           }
@@ -949,18 +1024,22 @@ footer b{color:#8b6a3e;font-weight:600}
   }
 
   async function exportHTML() {
-    // Detectar si hay filtros activos para exportar solo el subconjunto filtrado
-    const hasFilters = filterType !== 'all' || filterFamily !== 'all' ||
-      filterCatSlug !== 'all' || !!search || !!minPrice || !!maxPrice
-
     let exportProducts: Product[] | undefined
     let filterLabel: string | undefined
 
-    if (hasFilters) {
+    if (isFiltered) {
       // Exportar solo los productos que el usuario ve ahora
       exportProducts = filtered
-      // Construir un label legible que describe el filtro activo
+      // Construir label legible que describe los filtros activos
       const parts: string[] = []
+      if (filterStock === 'in_stock') parts.push('Disponibles')
+      else if (filterStock === 'out_stock') parts.push('Sin disponibilidad')
+      if (filterProdCat === 'fragrance') parts.push('Fragancias')
+      else if (filterProdCat === 'watch') parts.push('Relojes')
+      else if (filterProdCat === 'general') parts.push('General')
+      if (filterType === 'sealed') parts.push('Sellados')
+      else if (filterType === 'decant') parts.push('Para decants')
+      else if (filterType === 'tester') parts.push('Testers')
       if (filterCatSlug !== 'all') {
         const cat = allCategories.find(c => c.id === filterCatSlug)
         if (cat) parts.push((cat.emoji ? cat.emoji + ' ' : '') + cat.name)
@@ -969,8 +1048,6 @@ footer b{color:#8b6a3e;font-weight:600}
         const fam = families.find(f => f.value === filterFamily)
         if (fam) parts.push(fam.label)
       }
-      if (filterType === 'sealed') parts.push('Sellados')
-      else if (filterType === 'decant') parts.push('Para decants')
       if (search) parts.push(`"${search}"`)
       if (minPrice || maxPrice) {
         const range = [minPrice && `desde Gs. ${parseInt(minPrice).toLocaleString('es-PY')}`, maxPrice && `hasta Gs. ${parseInt(maxPrice).toLocaleString('es-PY')}`].filter(Boolean).join(' ')
@@ -1079,14 +1156,12 @@ footer b{color:#8b6a3e;font-weight:600}
             icon={<FileCode size={14} />}
             onClick={exportHTML}
             title={
-              (filterType !== 'all' || filterFamily !== 'all' || filterCatSlug !== 'all' || search || minPrice || maxPrice)
+              isFiltered
                 ? `Exportar ${filtered.length} producto${filtered.length !== 1 ? 's' : ''} filtrados`
                 : 'Exportar catálogo completo'
             }
           >
-            {(filterType !== 'all' || filterFamily !== 'all' || filterCatSlug !== 'all' || search || minPrice || maxPrice)
-              ? `HTML (${filtered.length})`
-              : 'HTML'}
+            {isFiltered ? `HTML (${filtered.length})` : 'HTML'}
           </Button>
           <Button
             variant="secondary"
@@ -1140,14 +1215,15 @@ footer b{color:#8b6a3e;font-weight:600}
         </div>
       )}
 
-      {/* ── Búsqueda + toggle filtros ── */}
-      <div className="space-y-3 mb-6">
+      {/* ── Búsqueda + filtros profesionales ── */}
+      <div className="space-y-2.5 mb-6">
+        {/* Fila 1: buscador + botón filtros */}
         <div className="flex gap-2">
           <div className="relative flex-1">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none" />
             <input
               className="w-full pl-9 pr-3 py-2 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 focus:bg-white transition-colors placeholder:text-gray-300"
-              placeholder="Buscar fragancia o marca..."
+              placeholder="Buscar producto o marca..."
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
@@ -1155,92 +1231,229 @@ footer b{color:#8b6a3e;font-weight:600}
           <button
             onClick={() => setShowFilters(v => !v)}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-sm font-medium transition-colors cursor-pointer ${
-              showFilters || filterFamily !== 'all' || minPrice || maxPrice
+              showFilters || isFiltered
                 ? 'bg-violet-50 border-violet-200 text-violet-700'
                 : 'bg-gray-50 border-gray-100 text-gray-500 hover:border-gray-200'
             }`}
           >
             <SlidersHorizontal size={14} />
             Filtros
-            {(filterFamily !== 'all' || minPrice || maxPrice) && (
-              <span className="w-1.5 h-1.5 rounded-full bg-violet-500" />
+            {activeFilterCount > 0 && (
+              <span className="w-4 h-4 rounded-full bg-violet-500 text-white text-[10px] font-bold flex items-center justify-center leading-none">
+                {activeFilterCount}
+              </span>
             )}
           </button>
         </div>
 
-        {/* Pills de tipo */}
-        <div className="flex gap-2 overflow-x-auto pb-0.5 [scrollbar-width:none] [-webkit-overflow-scrolling:touch]">
-          {([
-            { value: 'all', label: 'Todos' },
-            { value: 'sealed', label: 'Sellados' },
-            { value: 'decant', label: 'Decants' },
-          ] as const).map(opt => (
-            <button
-              key={opt.value}
-              onClick={() => setFilterType(opt.value)}
-              className={`flex-none px-4 py-1.5 rounded-full text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
-                filterType === opt.value ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-          <div className="w-px bg-gray-100 self-stretch mx-1 shrink-0" />
-          {families.map(f => (
-            <button
-              key={f.value}
-              onClick={() => setFilterFamily(prev => prev === f.value ? 'all' : f.value)}
-              className={`flex-none px-3 py-1.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
-                filterFamily === f.value ? 'bg-violet-600 text-white' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
-          {/* Filtro por categorías dinámicas (v2.6) */}
-          {allCategories.length > 0 && (
-            <>
-              <div className="w-px bg-gray-100 self-stretch mx-1 shrink-0" />
-              {allCategories.map(cat => (
-                <button
-                  key={cat.id}
-                  onClick={() => setFilterCatSlug(prev => prev === cat.id ? 'all' : cat.id)}
-                  className={`flex-none px-3 py-1.5 rounded-full text-xs font-medium transition-all whitespace-nowrap cursor-pointer border ${
-                    filterCatSlug === cat.id ? 'text-white' : 'hover:opacity-80'
-                  }`}
-                  style={filterCatSlug === cat.id
-                    ? { backgroundColor: cat.color ?? '#6d28d9', borderColor: cat.color ?? '#6d28d9', color: '#fff' }
-                    : { backgroundColor: (cat.color ?? '#6d28d9') + '15', borderColor: (cat.color ?? '#6d28d9') + '40', color: cat.color ?? '#6d28d9' }
-                  }
-                >
-                  {cat.emoji ? `${cat.emoji} ` : ''}{cat.name}
-                </button>
-              ))}
-            </>
-          )}
-        </div>
-
-        {/* Panel filtros avanzados */}
-        {showFilters && (
-          <div className="flex gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
-            <div className="flex-1">
-              <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1 block">Precio mínimo</label>
-              <input type="number" placeholder="Gs. 0"
-                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white"
-                value={minPrice} onChange={e => setMinPrice(e.target.value)} />
-            </div>
-            <div className="flex-1">
-              <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1 block">Precio máximo</label>
-              <input type="number" placeholder="Sin límite"
-                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white"
-                value={maxPrice} onChange={e => setMaxPrice(e.target.value)} />
-            </div>
-            {(minPrice || maxPrice) && (
-              <button onClick={() => { setMinPrice(''); setMaxPrice('') }}
-                className="self-end p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors cursor-pointer">
-                <X size={13} />
-              </button>
+        {/* Fila 2: chips de filtros activos */}
+        {isFiltered && (
+          <div className="flex flex-wrap gap-1.5 items-center">
+            {search && (
+              <FilterChip label={`"${search}"`} onRemove={() => setSearch('')} />
             )}
+            {filterStock === 'in_stock' && (
+              <FilterChip label="Disponibles" onRemove={() => setFilterStock('all')} />
+            )}
+            {filterStock === 'out_stock' && (
+              <FilterChip label="Sin disponibilidad" onRemove={() => setFilterStock('all')} />
+            )}
+            {filterProdCat === 'fragrance' && (
+              <FilterChip label="🌸 Fragancias" onRemove={() => setFilterProdCat('all')} />
+            )}
+            {filterProdCat === 'watch' && (
+              <FilterChip label="⌚ Relojes" onRemove={() => setFilterProdCat('all')} />
+            )}
+            {filterProdCat === 'general' && (
+              <FilterChip label="📦 General" onRemove={() => setFilterProdCat('all')} />
+            )}
+            {filterType === 'sealed' && (
+              <FilterChip label="Sellados" onRemove={() => setFilterType('all')} />
+            )}
+            {filterType === 'decant' && (
+              <FilterChip label="Decants" onRemove={() => setFilterType('all')} />
+            )}
+            {filterType === 'tester' && (
+              <FilterChip label="Testers" onRemove={() => setFilterType('all')} />
+            )}
+            {filterFamily !== 'all' && (
+              <FilterChip
+                label={families.find(f => f.value === filterFamily as OlfactiveFamily)?.label ?? filterFamily}
+                onRemove={() => setFilterFamily('all')}
+                color="#059669"
+              />
+            )}
+            {filterCatSlug !== 'all' && (() => {
+              const cat = allCategories.find(c => c.id === filterCatSlug)
+              return cat ? (
+                <FilterChip
+                  label={(cat.emoji ? cat.emoji + ' ' : '') + cat.name}
+                  onRemove={() => setFilterCatSlug('all')}
+                  color={cat.color ?? '#6d28d9'}
+                />
+              ) : null
+            })()}
+            {(minPrice || maxPrice) && (
+              <FilterChip
+                label={`Gs. ${minPrice || '0'} – ${maxPrice || '∞'}`}
+                onRemove={() => { setMinPrice(''); setMaxPrice('') }}
+              />
+            )}
+            <button
+              onClick={clearAllFilters}
+              className="text-xs text-gray-400 hover:text-gray-600 transition-colors ml-1 underline underline-offset-2 cursor-pointer"
+            >
+              Limpiar todo
+            </button>
+          </div>
+        )}
+
+        {/* Fila 3: panel de filtros estructurado */}
+        {showFilters && (
+          <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 space-y-4">
+
+            {/* Disponibilidad */}
+            <div>
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Disponibilidad</p>
+              <div className="flex gap-2 flex-wrap">
+                {([
+                  { value: 'all', label: 'Todos' },
+                  { value: 'in_stock', label: 'Disponibles' },
+                  { value: 'out_stock', label: 'Sin disponibilidad' },
+                ] as const).map(opt => (
+                  <button key={opt.value} onClick={() => setFilterStock(opt.value)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer border ${
+                      filterStock === opt.value
+                        ? 'bg-gray-900 text-white border-gray-900'
+                        : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
+                    }`}>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Tipo de objeto */}
+            <div>
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Tipo de objeto</p>
+              <div className="flex gap-2 flex-wrap">
+                {([
+                  { value: 'all', label: 'Todos' },
+                  { value: 'fragrance', label: '🌸 Fragancias' },
+                  { value: 'watch', label: '⌚ Relojes' },
+                  { value: 'general', label: '📦 General' },
+                ] as const).map(opt => (
+                  <button key={opt.value} onClick={() => setFilterProdCat(opt.value)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer border ${
+                      filterProdCat === opt.value
+                        ? 'bg-violet-600 text-white border-violet-600'
+                        : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
+                    }`}>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Formato */}
+            <div>
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Formato</p>
+              <div className="flex gap-2 flex-wrap">
+                {([
+                  { value: 'all', label: 'Todos' },
+                  { value: 'sealed', label: 'Sellados' },
+                  { value: 'decant', label: 'Decants' },
+                  { value: 'tester', label: 'Testers' },
+                ] as const).map(opt => (
+                  <button key={opt.value} onClick={() => setFilterType(opt.value)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer border ${
+                      filterType === opt.value
+                        ? 'bg-sky-600 text-white border-sky-600'
+                        : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
+                    }`}>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Familia olfativa (oculta para Relojes y General) */}
+            {filterProdCat !== 'watch' && filterProdCat !== 'general' && (
+              <div>
+                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Familia olfativa</p>
+                <div className="flex gap-1.5 flex-wrap">
+                  <button onClick={() => setFilterFamily('all')}
+                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer border ${
+                      filterFamily === 'all'
+                        ? 'bg-emerald-600 text-white border-emerald-600'
+                        : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
+                    }`}>
+                    Todas
+                  </button>
+                  {families.map(f => (
+                    <button key={f.value} onClick={() => setFilterFamily(prev => prev === f.value ? 'all' : f.value)}
+                      className={`px-3 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer border ${
+                        filterFamily === f.value
+                          ? 'bg-emerald-600 text-white border-emerald-600'
+                          : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
+                      }`}>
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Categorías dinámicas */}
+            {allCategories.length > 0 && (
+              <div>
+                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Categorías</p>
+                <div className="flex gap-1.5 flex-wrap">
+                  <button onClick={() => setFilterCatSlug('all')}
+                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer border ${
+                      filterCatSlug === 'all'
+                        ? 'bg-gray-900 text-white border-gray-900'
+                        : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
+                    }`}>
+                    Todas
+                  </button>
+                  {allCategories.map(cat => (
+                    <button
+                      key={cat.id}
+                      onClick={() => setFilterCatSlug(prev => prev === cat.id ? 'all' : cat.id)}
+                      className="px-3 py-1 rounded-full text-xs font-medium transition-all cursor-pointer border"
+                      style={filterCatSlug === cat.id
+                        ? { backgroundColor: cat.color ?? '#6d28d9', borderColor: cat.color ?? '#6d28d9', color: '#fff' }
+                        : { backgroundColor: 'white', borderColor: (cat.color ?? '#6d28d9') + '60', color: cat.color ?? '#6d28d9' }
+                      }
+                    >
+                      {cat.emoji ? `${cat.emoji} ` : ''}{cat.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Precio */}
+            <div>
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Precio (Gs.)</p>
+              <div className="flex items-center gap-2">
+                <input type="number" placeholder="Mínimo"
+                  className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white"
+                  value={minPrice} onChange={e => setMinPrice(e.target.value)} />
+                <span className="text-gray-300 text-sm flex-none">–</span>
+                <input type="number" placeholder="Máximo"
+                  className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white"
+                  value={maxPrice} onChange={e => setMaxPrice(e.target.value)} />
+                {(minPrice || maxPrice) && (
+                  <button onClick={() => { setMinPrice(''); setMaxPrice('') }}
+                    className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors cursor-pointer flex-none">
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+            </div>
+
           </div>
         )}
       </div>
@@ -1253,8 +1466,8 @@ footer b{color:#8b6a3e;font-weight:600}
           </div>
           <p className="text-gray-500 font-medium">Sin fragancias disponibles</p>
           <p className="text-sm text-gray-300 mt-1">
-            {search || filterFamily !== 'all' || filterType !== 'all'
-              ? 'Probá con otros filtros'
+            {isFiltered
+              ? 'Probá con otros filtros o limpiá los activos'
               : 'Agregá stock desde Inventario'}
           </p>
         </div>
