@@ -244,14 +244,22 @@ export function Ventas() {
     const newAccountId = parseInt(editSaleForm.accountId)
     const oldAccountId = editSale.accountId
 
-    if (newAccountId !== oldAccountId) {
+    // Guard: solo operar sobre cuentas con IDs numéricos válidos.
+    // Ventas con saldo=0 (cubiertas por señas) pueden tener accountId NaN.
+    const oldValid = typeof oldAccountId === 'number' && !isNaN(oldAccountId)
+    const newValid = !isNaN(newAccountId)
+
+    if (oldValid && newValid && newAccountId !== oldAccountId) {
+      // Mover saldo de una cuenta a la otra
       await db.accounts.where('id').equals(oldAccountId).modify(a => { a.balance -= editSale.totalAmount })
       await db.accounts.where('id').equals(newAccountId).modify(a => { a.balance += editSale.totalAmount })
     }
+    // Si oldValid && !newValid: se está quitando la cuenta — no revertimos el saldo (el movimiento ya existe)
+    // Si !oldValid: la venta no tenía cuenta válida (saldo=0), no hay nada que revertir
 
     await db.sales.update(editSale.id!, {
       paymentMethod: editSaleForm.paymentMethod,
-      accountId: newAccountId,
+      accountId: newValid ? newAccountId : (oldValid ? oldAccountId : undefined),
       date: editSaleForm.date,
       notes: editSaleForm.notes,
     })
@@ -260,7 +268,9 @@ export function Ventas() {
     const allMovements = await db.movements.toArray()
     const saleMovement = allMovements.find(m => m.referenceId === editSale.id! && m.referenceType === 'sale')
     if (saleMovement?.id) {
-      await db.movements.update(saleMovement.id, { accountId: newAccountId, date: editSaleForm.date })
+      const movPatch: Record<string, unknown> = { date: editSaleForm.date }
+      if (newValid) movPatch.accountId = newAccountId
+      await db.movements.update(saleMovement.id, movPatch)
     }
 
     closeEditSale()

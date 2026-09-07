@@ -580,14 +580,20 @@ export function Logistica() {
     const totalProfit = order.totalAmount - totalCost - commission - señaCommissions
 
     await db.transaction('rw', [db.localOrders, db.accounts, db.movements, db.sales, db.saleItems], async () => {
+      // Si el saldo era 0 (cubierto por señas), no hay cuenta ni método nuevos.
+      // Usamos la cuenta/método de la seña principal para registrar la venta correctamente.
+      const saleAccountId = saldo > 0 ? parseInt(payAccountId) : undefined
+      const salePayMethod: PaymentMethod = saldo > 0
+        ? payMethod
+        : ((order.advancePayments?.[0]?.method as PaymentMethod | undefined) ?? 'other')
       const saleId = await db.sales.add({
         items: [],
         totalAmount: order.totalAmount,
         totalCost,
         totalProfit,
         commission: (commission + señaCommissions) > 0 ? (commission + señaCommissions) : undefined,
-        paymentMethod: payMethod,
-        accountId: parseInt(payAccountId),
+        paymentMethod: salePayMethod,
+        accountId: saleAccountId,
         customerId: order.customerId,
         customerName: order.customerName,
         referenceType: 'local_order',
